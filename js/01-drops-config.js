@@ -2103,7 +2103,8 @@ function enhanceOutcomeFromRoll(type, safe, en, r) {
     let rate = safe > 0 ? 1 / Math.max(1, en) : (en <= 0 ? 0.5 : 1 / (en * 2));
     return r < rate ? 'ok' : 'break';
 }
-function enhanceRollOutcome(d, en) {   // 擲一次衝裝骰 → 'ok'成功 | 'break'爆裝 | 'none'無事（僅武器 +9 起）
+function enhanceRollOutcome(d, en) {
+    if (typeof casualMultiplier === 'function' && casualMultiplier('enhance') === 1) return 'ok';   // 擲一次衝裝骰 → 'ok'成功 | 'break'爆裝 | 'none'無事（僅武器 +9 起）
     let safe = (d && d.safe) || 0;
     en = Number(en) || 0;
     let r = en < safe ? 0 : Math.random();   // 🎲 安定值內不消耗亂數；其餘每次嘗試獨立，可 save/load 重抽
