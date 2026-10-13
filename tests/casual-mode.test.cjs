@@ -19,6 +19,7 @@ function fresh(initial) {
   return {window:ctx.window,btn,store};
 }
 let a=fresh();
+assert.equal(a.window.casualHitBonus(),0);
 assert.equal(a.window.casualMultiplier('exp'),1);
 assert.equal(a.window.casualMultiplier('drop'),1);
 assert.equal(a.window.casualMultiplier('damage'),1);
@@ -26,12 +27,15 @@ assert.equal(a.window.casualMultiplier('taken'),1);
 assert.equal(a.window.casualMultiplier('speed'),1);
 assert.equal(a.window.casualMultiplier('enhance'),1);
 a.window.setCasualMode(true);
+assert.equal(a.window.casualHitBonus(),30);
 for(const [key,val] of Object.entries({exp:50,drop:50,damage:5,taken:0.2,gold:50,speed:3,enhance:1}))
   assert.equal(a.window.casualMultiplier(key),val,key);
 assert.equal(a.store.get('my_idle_rpg_casual_mode_v1'),'on');
 assert.equal(fresh('on').window.casualMultiplier('exp'),50);
+assert.equal(fresh('on').window.casualHitBonus(),30);
 a.window.setCasualMode(false);
 assert.equal(a.window.casualMultiplier('exp'),1);
+assert.equal(a.window.casualHitBonus(),0);
 assert.equal(a.store.get('my_idle_rpg_casual_mode_v1'),'off');
 assert.equal(a.window.casualMultiplier('unexpected'),1);
 // Validate enhancement override against the actual implementation.
@@ -41,7 +45,7 @@ assert.match(enhanceFile,/return 'ok'/);
 // Integration markers ensure important sites remain connected.
 for(const [path, markers] of Object.entries({
  'index.html':['js/casual-mode.js'],
- 'js/03-combat-core.js':["casualMultiplier('speed')","casualMultiplier('damage')","casualMultiplier('taken')"],
+ 'js/03-combat-core.js':["casualHitBonus()","casualMultiplier('speed')","casualMultiplier('damage')","casualMultiplier('taken')"],
  'js/04-combat-attack.js':["casualMultiplier('taken')"],
  'js/05-kill-progression.js':["casualMultiplier('exp')","casualMultiplier('drop')","casualMultiplier('gold')"],
  'js/07-skills-cast.js':["casualMultiplier('damage')"]
@@ -50,3 +54,7 @@ for(const [path, markers] of Object.entries({
  for(const m of markers)assert.ok(body.includes(m),path+': '+m);
 }
 console.log('Casual mode tests passed');
+
+// Both attack types share getPhysicalDmg; the additive hit bonus must be applied after selecting meleeHit/rangedHit.
+const physicalCore=fs.readFileSync('js/03-combat-core.js','utf8');
+assert.match(physicalCore,/let hitBonus = \(isRanged \? player\.d\.rangedHit : player\.d\.meleeHit\)[^\n]*casualHitBonus\(\)/);
