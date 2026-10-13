@@ -20,6 +20,7 @@ function fresh(initial) {
 }
 let a=fresh();
 assert.equal(a.window.casualHitBonus(),0);
+assert.equal(a.window.casualKariSpawnChance(),0.01);
 assert.equal(a.window.casualMultiplier('exp'),1);
 assert.equal(a.window.casualMultiplier('drop'),1);
 assert.equal(a.window.casualMultiplier('damage'),1);
@@ -28,6 +29,7 @@ assert.equal(a.window.casualMultiplier('speed'),1);
 assert.equal(a.window.casualMultiplier('enhance'),1);
 a.window.setCasualMode(true);
 assert.equal(a.window.casualHitBonus(),30);
+assert.equal(a.window.casualKariSpawnChance(),1);
 for(const [key,val] of Object.entries({exp:50,drop:500,damage:5,taken:0.2,gold:50,speed:3,enhance:1}))
   assert.equal(a.window.casualMultiplier(key),val,key);
 assert.equal(a.store.get('my_idle_rpg_casual_mode_v1'),'on');
@@ -35,10 +37,12 @@ assert.equal(fresh('on').window.casualMultiplier('exp'),50);
 assert.equal(fresh('on').window.casualMultiplier('drop'),500);
 assert.match(a.btn.title, /掉寶×500/);
 assert.equal(fresh('on').window.casualHitBonus(),30);
+assert.equal(fresh('on').window.casualKariSpawnChance(),1);
 a.window.setCasualMode(false);
 assert.equal(a.window.casualMultiplier('exp'),1);
 assert.equal(a.window.casualMultiplier('drop'),1);
 assert.equal(a.window.casualHitBonus(),0);
+assert.equal(a.window.casualKariSpawnChance(),0.01);
 assert.equal(a.store.get('my_idle_rpg_casual_mode_v1'),'off');
 assert.equal(a.window.casualMultiplier('unexpected'),1);
 // Validate enhancement override against the actual implementation.
@@ -80,3 +84,38 @@ console.log('Casual mode tests passed');
 // Both attack types share getPhysicalDmg; the additive hit bonus must be applied after selecting meleeHit/rangedHit.
 const physicalCore=fs.readFileSync('js/03-combat-core.js','utf8');
 assert.match(physicalCore,/let hitBonus = \(isRanged \? player\.d\.rangedHit : player\.d\.meleeHit\)[^\n]*casualHitBonus\(\)/);
+
+
+// Execute the real Kari spawn condition, not a duplicate reimplementation.
+const coreSource=fs.readFileSync('js/03-combat-core.js','utf8');
+const kariStart=coreSource.indexOf("    if (mapState.current === 'zone_31'\n");
+assert.ok(kariStart >= 0,'Kari spawn condition not found');
+const kariEnd=coreSource.indexOf('    // 🔥 50級試煉',kariStart);
+assert.ok(kariEnd > kariStart,'Kari spawn condition end not found');
+const kariBlock=coreSource.slice(kariStart,kariEnd);
+assert.match(kariBlock,/casualKariSpawnChance\(\)/,'Kari must use casual mode spawn chance');
+const kariItems=['item_dragon_claw','item_lizard_horn','item_crystal_ball','item_orc_amulet'];
+const allKariItems=()=>kariItems.map(id=>({id,cnt:1}));
+function kariRoll({casual=false,map='zone_31',bossInBattle=false,mobs=[],inv=allKariItems(),roll=0.999}={}) {
+  const mode=fresh(casual ? 'on' : 'off').window;
+  return vm.runInNewContext('(() => { let mobId="other";\n'+kariBlock+'\nreturn mobId; })()', {
+    mapState:{current:map,mobs},
+    bossInBattle,
+    player:{inv},
+    Math:{random:()=>roll},
+    casualKariSpawnChance:mode.casualKariSpawnChance
+  });
+}
+assert.equal(kariRoll({casual:true,roll:0.999999}),'kari','casual mode: 100% if eligible');
+assert.equal(kariRoll({casual:false,roll:0}),'kari','normal mode: still has 1% chance');
+assert.equal(kariRoll({casual:false,roll:0.00999}),'kari','normal mode: rolls below 1%');
+assert.equal(kariRoll({casual:false,roll:0.01}),'other','normal mode: rolls at/above 1% fail');
+assert.equal(kariRoll({casual:false,roll:0.999}),'other','normal mode: not guaranteed');
+assert.equal(kariRoll({casual:true,map:'zone_30'}),'other','wrong floor blocks spawn');
+assert.equal(kariRoll({casual:true,bossInBattle:true}),'other','other boss blocks spawn');
+assert.equal(kariRoll({casual:true,mobs:[{n:'卡瑞'}]}),'other','cannot spawn second Kari');
+for(const id of kariItems) {
+  assert.equal(kariRoll({casual:true,inv:allKariItems().filter(i=>i.id!==id)}),'other',id+' required');
+  assert.equal(kariRoll({casual:true,inv:allKariItems().map(i=>i.id===id?{...i,cnt:0}:i)}),'other',id+' needs positive count');
+}
+assert.equal(kariRoll({casual:true,mobs:[{n:'骷髏',boss:false}]}),'kari','regular mobs do not block Kari');

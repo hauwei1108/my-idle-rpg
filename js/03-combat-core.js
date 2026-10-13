@@ -2087,12 +2087,12 @@ function spawnMob(idx) {
         if (Math.random() < _trkRate) mobId = player.tracking.mob;
     }
     // 🔧 卡瑞（BOSS）：身上「同時」攜帶 飛龍的爪子/蜥蜴的角/水晶球/妖魔戰士護身符 時，
-    //    於龍之谷地監6樓 1% 機率出現（場上無其他 BOSS 時才出現，且同時最多一隻）
+    //    於龍之谷地監6樓出現（一般 1%；休閒 100%；場上無其他 BOSS 且同時最多一隻）
     if (mapState.current === 'zone_31'
         && !bossInBattle
         && !mapState.mobs.some(m => m && m.n === '卡瑞')
         && ['item_dragon_claw', 'item_lizard_horn', 'item_crystal_ball', 'item_orc_amulet'].every(q => player.inv.some(i => i.id === q && i.cnt > 0))
-        && Math.random() < 0.01) {
+        && Math.random() < (typeof casualKariSpawnChance === 'function' ? casualKariSpawnChance() : 0.01)) {
         mobId = 'kari';
     }
     // 🔥 50級試煉：大洞穴隱遁者村莊地區 1% 出現「魔族暗殺團」（妖精 stage2 收集密封情報書／法師 stage1 收集間諜報告書）
