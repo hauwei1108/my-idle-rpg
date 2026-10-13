@@ -522,7 +522,7 @@ function playerOffhandIntervalTicks(includeTemporarySlow) {
     if (!player || !player.eq || !player.eq.offwpn) return 0;
     let aspd = (player.d) ? Number(player.d.aspdOff) : 0;
     if (!Number.isFinite(aspd) || aspd <= 0) return 0;
-    let ticks = Math.max(1, aspd * 10);
+    let ticks = Math.max(1, aspd * 10 / casualMultiplier('speed'));
     if (includeTemporarySlow !== false && player.statuses && player.statuses.slowAtk > 0) ticks *= 2;   // 寒冰吐息等減速：兩手同步吃
     return ticks;
 }
@@ -593,6 +593,7 @@ function tick() {
             logCombat(`毒液化身汲取毒素：受到劇毒傷害 ${_pdmg} 點，恢復 ${_pheal} 點HP。`, 'player');
             updateUI();
         } else {
+            _pdmg = Math.floor(_pdmg * casualMultiplier('taken'));
             player.hp -= _pdmg;
             if (typeof dotMpRefundTo === 'function') dotMpRefundTo(player, _pdmg);   // 🏺 v3.7.52 受困幽魂的淚滴：DoT 損血回 MP
             logCombat(`你受到劇毒傷害 ${_pdmg} 點。`, 'enemy');
@@ -601,21 +602,21 @@ function tick() {
         }
     }
     if(player.statuses.burn > 0 && state.ticks % player.statuses.burnTick === 0 && !inAbsBarrier()) {
-        player.hp -= player.statuses.burnDmg;
+        player.hp -= Math.floor(player.statuses.burnDmg * casualMultiplier('taken'));
         if (typeof dotMpRefundTo === 'function') dotMpRefundTo(player, player.statuses.burnDmg);   // 🏺 v3.7.52 淚滴
         logCombat(`你受到灼燒傷害 ${player.statuses.burnDmg} 點。`, 'enemy');
         if(player.hp <= 0) { killPlayer(); return; }
         updateUI();
     }
     if(player.statuses.scald > 0 && state.ticks % player.statuses.scaldTick === 0 && !inAbsBarrier()) {
-        player.hp -= player.statuses.scaldDmg;
+        player.hp -= Math.floor(player.statuses.scaldDmg * casualMultiplier('taken'));
         if (typeof dotMpRefundTo === 'function') dotMpRefundTo(player, player.statuses.scaldDmg);   // 🏺 v3.7.52 淚滴
         logCombat(`你受到燙傷傷害 ${player.statuses.scaldDmg} 點。`, 'enemy');
         if(player.hp <= 0) { killPlayer(); return; }
         updateUI();
     }
     if(player.statuses.bleed > 0 && state.ticks % player.statuses.bleedTick === 0 && !inAbsBarrier()) {
-        player.hp -= player.statuses.bleedDmg;
+        player.hp -= Math.floor(player.statuses.bleedDmg * casualMultiplier('taken'));
         if (typeof dotMpRefundTo === 'function') dotMpRefundTo(player, player.statuses.bleedDmg);   // 🏺 v3.7.52 淚滴
         logCombat(`你受到出血傷害 ${player.statuses.bleedDmg} 點。`, 'enemy');
         if(player.hp <= 0) { killPlayer(); return; }
