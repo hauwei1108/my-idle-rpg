@@ -6,7 +6,7 @@ function fresh(initial) {
   const store = new Map();
   if (initial) store.set('my_idle_rpg_casual_mode_v1', initial);
   const listeners = {};
-  const btn = { textContent: '', setAttribute(k,v) { this[k]=v; }, addEventListener(k,fn){this[k]=fn;} };
+  const btn = { style: { cssText: '' }, textContent: '', setAttribute(k,v) { this[k]=v; }, addEventListener(k,fn){this[k]=fn;} };
   const document = {
     readyState: 'complete',
     getElementById(){ return this.created ? btn : null; },
