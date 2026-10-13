@@ -10,6 +10,8 @@
   };
   // Hit is an additive stat, not a multiplier; applies equally to melee and ranged attacks.
   window.casualHitBonus = function () { return current ? 30 : 0; };
+  // Cardis/Kari special encounter only: normal 1%, casual 100%; does not alter spawn gates.
+  window.casualKariSpawnChance = function () { return current ? 1 : 0.01; };
   window.casualModeEnabled = function () { return current; };
   window.setCasualMode = function (enabled) {
     current = !!enabled;
