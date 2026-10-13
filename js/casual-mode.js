@@ -8,6 +8,8 @@
   window.casualMultiplier = function (key) {
     return current && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : 1;
   };
+  // Hit is an additive stat, not a multiplier; applies equally to melee and ranged attacks.
+  window.casualHitBonus = function () { return current ? 30 : 0; };
   window.casualModeEnabled = function () { return current; };
   window.setCasualMode = function (enabled) {
     current = !!enabled;
