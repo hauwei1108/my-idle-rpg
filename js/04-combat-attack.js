@@ -1273,6 +1273,7 @@ function _enemyPhysicalAttackInner(mob, idx, stunChance = 0, atkDmg = null, atkD
             updateUI();
             return;
         }
+        totalDmg = Math.max(0, Math.floor(totalDmg * casualMultiplier('taken')));
         player.hp -= totalDmg;
         if (isBasicAttack && totalDmg > 0) corrosiveJellySkinOnBasicHit(mob, player);
         // 🏺 v3.7.20 長老的黑曜水晶球（crushTornado）：被重擊時 → 對敵方全體施放龍捲風（procFreeMagicSkill target:'all' 自動掃全場·免費施放）
