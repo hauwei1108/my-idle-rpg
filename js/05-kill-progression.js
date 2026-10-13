@@ -248,7 +248,7 @@ function trialItemDropMult(id) { return 1; }
 function partyActiveMemberCount() { return Math.min(8, 1 + ((player.allies || []).filter(a => a && !a._downed).length)); }
 function partyExpShareCount() { return partyActiveMemberCount(); }   // 相容 native-preview／舊外部呼叫；不再作為除數
 function partyRewardMult() { return partyActiveMemberCount(); }
-function partyDropRate(rate) { return Math.min(1, Math.max(0, Number(rate) || 0) * partyRewardMult()); }
+function partyDropRate(rate) { return Math.min(1, Math.max(0, Number(rate) || 0) * partyRewardMult() * casualMultiplier('drop')); }
 // 任務道具的主玩家與隊員分流：隊員保留個別試煉進度，但所有實體道具都立即交給隊長背包。
 function grantPartyTrialQuestDrop(itemId, cnt) {
     cnt = Math.max(1, Math.floor(Number(cnt) || 1));
@@ -374,7 +374,7 @@ function killMob(idx) {
     // 🤝 v3.7.62 組隊經驗不再拆分：主玩家、每名未倒地傭兵、每隻未倒地寵物各取得完整經驗；既有組隊加成保留。
     let _expEach = mob.exp * (1 + partyExpBonusPct() / 100);
     let _petExpGain = Math.floor(_expEach * (1 + dollFieldVal('expBonus') / 100));   // 🐾 每隻存活寵物各得完整玩家份額；玩家滿等不影響養寵
-    let _playerExpGain = Math.floor(_petExpGain * getExpGainMult(player.lv));   // ⚠️v3.0.82 經典×0.5 已移除；Lv100 玩家自身仍不獲得經驗
+    let _playerExpGain = Math.floor(_petExpGain * getExpGainMult(player.lv) * casualMultiplier('exp'));   // ⚠️v3.0.82 經典×0.5 已移除；Lv100 玩家自身仍不獲得經驗
     player.exp += _playerExpGain;
     checkLvUp();
     // 🐾 寵物經驗：每隻未倒地出戰寵物各得完整份額；不受玩家 Lv100 經驗封頂影響（升級需求＝玩家表 1/10）
@@ -383,7 +383,7 @@ function killMob(idx) {
     if (player.allies && player.allies.length && mob.exp) {
         player.allies.forEach(a => {
             if (!a || a._downed) return;
-            let _gain = Math.floor(_expEach * getExpGainMult(a.lv || 1));
+            let _gain = Math.floor(_expEach * getExpGainMult(a.lv || 1) * casualMultiplier('exp'));
             if (_gain <= 0) return;
             a.exp = (a.exp || 0) + _gain;
             a._expGained = (a._expGained || 0) + _gain;
@@ -399,7 +399,7 @@ function killMob(idx) {
         let g = _goldRange.min + Math.floor(Math.random() * (_goldRange.max - _goldRange.min + 1));
         g = Math.max(1, Math.floor(g * (0.9 + Math.random() * 0.2)));   // 💰 最終金額額外浮動 −10%～+10%
         // ⚠️v3.0.82 經典模式金幣÷2 已移除（一般＝經典；歷次：×1/10 → ×1/3 → ×1/2 → ×1）
-        g = Math.floor(g * (1 + dollFieldVal('goldBonus') / 100) * partyRewardMult());   // 🪆 娃娃加成後再乘有效隊伍人數（最高 ×8）
+        g = Math.floor(g * (1 + dollFieldVal('goldBonus') / 100) * partyRewardMult() * casualMultiplier('gold'));   // 🪆 娃娃加成後再乘有效隊伍人數（最高 ×8）
         player.gold += g;
         // 🔧 金幣不再逐殺輸出於系統日誌；改由 gameLoop 累積、flushAwaySummary 以「掛機期間獲得總金幣」統一顯示。
 
@@ -488,7 +488,7 @@ function killMob(idx) {
     // === 怪物專屬掉落（依「怪物掉落資料.md」）：每樣物品各自獨立判定一次 ===
     let dropList = _kbNoReward ? [] : (MOB_DROPS[mob.n] || []);   // 🔧 魔獸軍王之室：除頭目外不掉落物品
     let _dropBase = (mob._grace ? 10 : (mob._sherine ? (mob._sherineMad ? 5 : 3) : 1));   // 🔮 席琳的世界 ×3（瘋狂×5）／恩賜怪 ×10
-    let _dropMult = _dropBase * classicDropMult() * partyRewardMult();   // 席琳／恩賜／模式倍率後再乘有效隊伍人數（最高 ×8）
+    let _dropMult = _dropBase * classicDropMult() * partyRewardMult() * casualMultiplier('drop');   // 席琳／恩賜／模式倍率後再乘有效隊伍人數（最高 ×8）
     dropList.forEach(entry => {
         let itemId = entry[0];
         let ratePct = entry[1];               // 機率(%)
