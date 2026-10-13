@@ -1,0 +1,22 @@
+name: Casual Mode Tests
+on:
+  pull_request:
+    paths:
+      - 'js/**'
+      - 'index.html'
+      - 'tests/**'
+      - '.github/workflows/casual-mode-tests.yml'
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JavaScript syntax check
+        run: |
+          for f in js/*.js; do node --check "$f" || exit 1; done
+      - name: Unit and integration markers
+        run: node tests/casual-mode.test.cjs

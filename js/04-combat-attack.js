@@ -1273,6 +1273,7 @@ function _enemyPhysicalAttackInner(mob, idx, stunChance = 0, atkDmg = null, atkD
             updateUI();
             return;
         }
+        totalDmg = Math.max(0, Math.floor(totalDmg * casualMultiplier('taken')));
         player.hp -= totalDmg;
         if (isBasicAttack && totalDmg > 0) corrosiveJellySkinOnBasicHit(mob, player);
         // 🏺 v3.7.20 長老的黑曜水晶球（crushTornado）：被重擊時 → 對敵方全體施放龍捲風（procFreeMagicSkill target:'all' 自動掃全場·免費施放）
@@ -1792,6 +1793,7 @@ function reflectWallOnDamage(mob, dmg, kind, ally) {
         logCombat(`<span class="font-bold" style="color:#f87171;text-shadow:0 0 6px #dc2626;">【血壁空間】</span><span class="${getMobColor(mob.lv)}">${mob.n}</span> 反彈了${_k}傷害，協力·${ally._allyName} 受到 ${dmg} 點傷害！`, 'enemy');
         if (ally.curHp <= 0) { ally.curHp = 0; ally._downed = true; ally._reviveCd = 150; logCombat(`<span class="text-amber-400 font-bold">協力傭兵 ${ally._allyName} 倒下了！（可用返生術立即復活，或 15 秒後自動使用復活卷軸，或回村免費復活）</span>`, 'enemy'); try { renderSquadPanel(); } catch (e) {} }
     } else {
+        dmg = Math.max(0, Math.floor(dmg * casualMultiplier('taken')));
         player.hp -= dmg;
         logCombat(`<span class="font-bold" style="color:#f87171;text-shadow:0 0 6px #dc2626;">【血壁空間】</span><span class="${getMobColor(mob.lv)}">${mob.n}</span> 反彈了${_k}傷害，你受到 ${dmg} 點傷害！`, 'enemy');
         if (player.hp <= 0 && typeof killPlayer === 'function') killPlayer();
@@ -2418,6 +2420,7 @@ function _applyMobMagicInner(mob, sk) {
         dmg = Math.max(0, Math.floor(dmg * antHelperDrMult()));   // 🐉 v3.7.57 助戰者「護衛」減免（魔法）
         dmg = dollDamageReduced(dmg);   // 🪆 魔法娃娃：受傷機率傷害減免（史巴托/巫妖）
         dmg = shieldDmgReduceProc(player, dmg);   // 🌑 v3.3.33 反叛者的盾牌：受傷 proc（魔法亦適用）
+        dmg = Math.max(0, Math.floor(dmg * casualMultiplier('taken')));
         player.hp -= dmg;
         if (dmg > 0) _relicOnDamageHeal();   // 🏺 遺物 白螞蟻蛋殼：受魔法傷害時亦觸發受擊自癒（5 秒節流·physical/magic 共用冷卻）
         if (dmg > 0) _relicOnHurtCast(mob);   // 🏺 遺物 法師的護身短刀：受魔法傷害時亦 20% 免費施放自動攻擊法術

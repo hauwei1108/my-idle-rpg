@@ -848,6 +848,7 @@ function castSkillInner(skId) {
                     if (sk.hpCost && player._setDragonblood5) totalDmg = Math.max(1, Math.floor(totalDmg * 1.2));   // 🐉 龍血5/5：HP消耗技傷害+20%
                     totalDmg = illusionMagicDmg(totalDmg, false);   // 🔮 攻擊技能下拉選單可選的一般傷害法術，不觸發幻覺2/5與5/5
                     totalDmg = Math.max(1, Math.floor(totalDmg * equipSkillDmgMult(sk, skId) * (_autoCastNow ? (_equipWpnField('autoCastDmgMult') || 1) : 1)));   // 🏺 遺物 特定技能傷害倍率（冰錐/光箭/究極光裂術 ×1.5）；🐍 枯竭魔杖：auto 施放傷害 ×autoCastDmgMult(1.5)
+                    totalDmg = Math.max(1, Math.floor(totalDmg * casualMultiplier('damage')));
                     t.curHp -= totalDmg;
                     if (typeof moonShatterOnDamage === 'function') moonShatterOnDamage(player, t, totalDmg);
                     _burstDmg += totalDmg;   // 🔧 魔爆累計
