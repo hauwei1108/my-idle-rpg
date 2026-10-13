@@ -2286,7 +2286,7 @@ function consumeWetMult(target, ele) {
 }
 function getPhysicalDmg(diceStr, target, wpn, arrowData, forceHeavy, forceHit, forceLand, forceCrit, wpnInst, forceGraze, probe) {
     let isRanged = !!(wpn && wpn.ranged);
-    let hitBonus = (isRanged ? player.d.rangedHit : player.d.meleeHit) + player.d.extraHit + (player._skillHitBonus || 0);   // 🗼 范德之劍：施展衝擊之暈時本次技能近距離命中+1
+    let hitBonus = (isRanged ? player.d.rangedHit : player.d.meleeHit) + player.d.extraHit + (player._skillHitBonus || 0) + (typeof casualHitBonus === 'function' ? casualHitBonus() : 0);   // 🗼 范德之劍：施展衝擊之暈時本次技能近距離命中+1
     let dmgBonus = (isRanged ? player.d.rangedDmg : player.d.meleeDmg);
     // 🌅 日出之國異常（玩家承受）：弱化＝傷害−5/命中−2；疾病＝命中−4（AC+8 在敵方命中端）；目盲＝命中−6
     if (player.statuses) {
