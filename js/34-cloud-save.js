@@ -7,7 +7,8 @@
     const TABLE = 'game_saves';
     const LINK_KEY = 'fb5_cloud_link_owner_v1';
     const MAX_JSON_CHARS = 12 * 1024 * 1024;
-    const INTERVAL_MS = 60000;
+    // Regularly persist active gameplay: cloud snapshots are not tied to the game's 5-minute autosave.
+    const INTERVAL_MS = 10000;
     const SESSION_CHECK_MS = 5000;
 
     const KEYS = [];
@@ -40,6 +41,8 @@
     let hasCloud = false;
     let pendingProgress = false;
     let saveScheduled = false;
+    let pendingUpload = false;
+    let insideCloudLocalSave = false;
     let busy = false;
     let sessionToken = null;
     let kicked = false;
@@ -86,15 +89,27 @@
         heading.textContent = '帳號已在其他裝置登入';
         const msg = document.createElement('p');
         msg.textContent = '依照後登入優先規則，這個遊戲連線已被登出。重新整理可重新取得使用權，並踢除其他連線。';
+        const backup = document.createElement('button');
+        backup.textContent = '下載這台裝置的本機進度備份';
+        backup.style.cssText = 'background:#1f2937;color:white;padding:12px 20px;border:1px solid #94a3b8;cursor:pointer;';
+        backup.addEventListener('click', function () {
+            try { downloadBackup(snapshot()); }
+            catch (e) { window.alert('本機備份失敗：' + (e && e.message || '未知錯誤')); }
+        });
         const btn = document.createElement('button');
         btn.textContent = '重新登入此帳號';
         btn.style.cssText = 'background:#875719;color:white;padding:12px 20px;border:1px solid #d7aa45;cursor:pointer;';
         btn.addEventListener('click', function () { window.location.reload(); });
-        el.appendChild(heading); el.appendChild(msg); el.appendChild(btn);
+        el.appendChild(heading); el.appendChild(msg); el.appendChild(backup); el.appendChild(btn);
         document.body.appendChild(el);
     }
     function markKicked() {
         if (kicked) return;
+        // Claiming another session prevents old cloud writes immediately. Preserve the
+        // still-live role in the old browser first, so its unsent progress remains recoverable.
+        try {
+            if (isPlaying() && typeof saveGame === 'function') saveGame();
+        } catch (e) { console.warn('[cloud] local save on session displacement failed', e); }
         kicked = true;
         active = false; firstUploadArmed = false; accountReady = false;
         pendingProgress = false; sessionToken = null;
@@ -229,17 +244,21 @@
         return false;
     }
     function onProgressSaved() {
-        // Invoked only after successful existing saveGame/importSave writes.
-        if (!client || !userId || kicked) return;
+        // A successful local save is the canonical signal of unsent progress.
+        if (!client || !userId || kicked || insideCloudLocalSave) return;
         if (!accountReady) { pendingProgress = true; return; }
         if (!active && !firstUploadArmed) return;
+        if (busy) { pendingUpload = true; return; }
         if (saveScheduled) return;
         saveScheduled = true;
         const epoch = accountEpoch;
+        // A backgrounded tab may be suspended immediately. Avoid the old 1.2s delay
+        // in that case; a synchronous local save has already completed.
+        const delay = document.hidden ? 0 : 200;
         setTimeout(function () {
             saveScheduled = false;
             if (accountEpoch === epoch) uploadCloud(false);
-        }, 1200);
+        }, delay);
     }
     function getAuth() { return window.IDLE_GOOGLE_AUTH || null; }
     async function verifiedUser() {
@@ -293,7 +312,7 @@
             client = null; userId = null; revision = null; active = false;
             sessionToken = null;
             firstUploadArmed = false; accountReady = false; hasCloud = false;
-            pendingProgress = false; lastPayload = null;
+            pendingProgress = false; pendingUpload = false; lastPayload = null;
             draw();
             return;
         }
@@ -410,8 +429,14 @@
             const validUser = await verifiedUser();
             if (!validUser || validUser.id !== uid || epoch !== accountEpoch) throw new Error('登入帳號已變更');
             if (isPlaying()) {
-                if (typeof saveGame !== 'function' || saveGame() !== true)
-                    throw new Error('無法保存進行中的角色，已取消上傳');
+                if (typeof saveGame !== 'function')
+                    throw new Error('缺少本機存檔功能，已取消上傳');
+                // saveGame calls onProgressSaved; do not cause re-entrant uploads.
+                insideCloudLocalSave = true;
+                let saved = false;
+                try { saved = saveGame() === true; }
+                finally { insideCloudLocalSave = false; }
+                if (!saved) throw new Error('無法保存進行中的角色，已取消上傳');
             }
             const bundle = snapshot(), json = JSON.stringify(bundle);
             if (!Object.keys(bundle.entries).some(k => /^lineage_idle_save_[1-8]$/.test(k)))
@@ -465,6 +490,12 @@
             }
         } finally {
             busy = false; draw();
+            // New local data may have arrived during an in-flight cloud request.
+            // Never drop that signal merely because the upload was busy.
+            if (pendingUpload) {
+                pendingUpload = false;
+                if (!kicked && (active || firstUploadArmed)) onProgressSaved();
+            }
         }
     }
     function start() {
@@ -480,6 +511,12 @@
         // Never bind pre-existing local data merely because 60 seconds elapsed.
         // First cloud upload must follow successful import/creation/save event.
         setInterval(function () { if (active) uploadCloud(false); }, INTERVAL_MS);
+        // The game already flushes its local save earlier in the registration order.
+        // Start network upload without waiting for the next scheduled timer.
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden && !kicked && (active || firstUploadArmed))
+                uploadCloud(false);
+        });
         setInterval(checkSession, SESSION_CHECK_MS);
         draw();
     }
