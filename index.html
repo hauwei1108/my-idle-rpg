@@ -42,6 +42,9 @@
             <button type="button" id="btn-google-login" disabled>使用 Google 帳號登入</button>
             <button type="button" id="btn-google-logout" hidden>登出 Google 帳號</button>
             <p id="google-auth-status" role="status" aria-live="polite">尚未設定 Google 登入；訪客模式與本機存檔正常可用。</p>
+            <button type="button" id="cloud-save-upload" hidden>上傳本機存檔</button>
+            <button type="button" id="cloud-save-restore" hidden>下載雲端存檔</button>
+            <p id="cloud-save-status" role="status" aria-live="polite">Google 登入後可啟用完整進度的雲端備份。</p>
             <button onclick="toggleVfxPref()" id="btn-vfx-toggle" class="btn text-base w-72 py-2.5 bg-slate-700 hover:bg-slate-600 border-slate-500">✨ 戰鬥特效：開啟</button>
             <button onclick="toggleVfxNumPref()" id="btn-vfxnum-toggle" class="btn text-base w-72 py-2.5 bg-slate-700 hover:bg-slate-600 border-slate-500">🔢 傷害數字：開啟</button>
             <p class="text-xs text-slate-500 -mt-2 w-72 text-center">效果較弱/卡頓的裝置可關閉戰鬥特效；「傷害數字」可獨立關閉、其餘特效保留（開始前設定，遊戲中不再提供）</p>
@@ -593,5 +596,6 @@
 <script src="js/32-threat.js?v=v3.8.23-sherine-set-rework"></script>
     <script src="js/google-auth-config.js?v=1"></script>
     <script src="js/33-google-auth.js?v=1"></script>
+    <script src="js/34-cloud-save.js?v=1"></script>
 </body>
 </html>
