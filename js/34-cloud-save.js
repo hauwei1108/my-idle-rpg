@@ -327,6 +327,23 @@
         writeLink(uid, rev);
         activateCloud(row, uid);
     }
+    async function beforeGoogleSignOut() {
+        if (!userId) return true;
+        if (kicked || !accountReady || busy) {
+            setMessage('目前雲端存檔尚未就緒，請確認連線後再登出。', true);
+            return false;
+        }
+        if (!localHasProgress()) return true;
+        await uploadCloud(false);
+        let latest;
+        try { latest = JSON.stringify(snapshot()); }
+        catch (_) { return false; }
+        if (!active || lastPayload !== latest) {
+            setMessage('遊戲進度尚未成功同步雲端，已取消登出；請等待同步成功。', true);
+            return false;
+        }
+        return true;
+    }
     function afterGoogleSignOut() {
         // Signed-in account cache must never become a guest role.
         // The cloud data remains in Supabase. This clears only known game keys.
@@ -591,8 +608,9 @@
     window.IDLE_CLOUD_SAVE = Object.freeze({
         // Explicitly exported for integration tests; excludes credentials and raw save data.
         keys: KEYS.slice(), validate: validate, onProgressSaved: onProgressSaved,
-        canSaveLocally: canSaveLocally, prepareGoogleSignIn: prepareGoogleSignIn,
-        afterGoogleSignOut: afterGoogleSignOut
+        canSaveLocally: canSaveLocally, isReady: function () { return accountReady && !kicked; },
+        prepareGoogleSignIn: prepareGoogleSignIn,
+        beforeGoogleSignOut: beforeGoogleSignOut, afterGoogleSignOut: afterGoogleSignOut
     });
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', start, { once: true });
