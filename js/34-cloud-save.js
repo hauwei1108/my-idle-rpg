@@ -8,6 +8,7 @@
     const LINK_KEY = 'fb5_cloud_link_owner_v1';
     const MAX_JSON_CHARS = 12 * 1024 * 1024;
     const INTERVAL_MS = 60000;
+    const SESSION_CHECK_MS = 5000;
 
     const KEYS = [];
     for (let n = 1; n <= 8; n++) KEYS.push('lineage_idle_save_' + n);
@@ -40,6 +41,9 @@
     let pendingProgress = false;
     let saveScheduled = false;
     let busy = false;
+    let sessionToken = null;
+    let kicked = false;
+    let claiming = false;
     let accountEpoch = 0;
     let lastPayload = null;
     let lastMessage = 'Google 登入後，建立角色或匯入進度便會自動綁定帳號。';
@@ -61,9 +65,73 @@
         restore.hidden = !(signedIn && accountReady && hasCloud);
         upload.disabled = restore.disabled = busy;
         const start = $('btn-start-menu');
-        if (start) start.disabled = signedIn && !accountReady;
+        if (start) start.disabled = signedIn && (!accountReady || kicked);
         status.textContent = signedIn ? lastMessage : '訪客模式僅儲存在本機；Google 登入後，進度會自動綁定與備份。';
         status.style.color = lastError ? '#fca5a5' : '#e7d7b5';
+    }
+    function canSaveLocally() { return !kicked; }
+    function showKickedScreen() {
+        const status = $('cloud-save-status');
+        if (status) status.textContent = '此 Google 帳號已在其他裝置或分頁登入，本連線已中止。';
+        if (typeof state !== 'undefined' && state) state.running = false;
+        if ($('cloud-session-kicked')) return;
+        const el = document.createElement('div');
+        el.id = 'cloud-session-kicked';
+        el.setAttribute('role', 'alertdialog');
+        el.setAttribute('aria-modal', 'true');
+        el.style.cssText = 'position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.95);'+
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;'+
+            'font:18px sans-serif;color:#fff;text-align:center;padding:24px;';
+        const heading = document.createElement('h2');
+        heading.textContent = '帳號已在其他裝置登入';
+        const msg = document.createElement('p');
+        msg.textContent = '依照後登入優先規則，這個遊戲連線已被登出。重新整理可重新取得使用權，並踢除其他連線。';
+        const btn = document.createElement('button');
+        btn.textContent = '重新登入此帳號';
+        btn.style.cssText = 'background:#875719;color:white;padding:12px 20px;border:1px solid #d7aa45;cursor:pointer;';
+        btn.addEventListener('click', function () { window.location.reload(); });
+        el.appendChild(heading); el.appendChild(msg); el.appendChild(btn);
+        document.body.appendChild(el);
+    }
+    function markKicked() {
+        if (kicked) return;
+        kicked = true;
+        active = false; firstUploadArmed = false; accountReady = false;
+        pendingProgress = false; sessionToken = null;
+        lastPayload = null;
+        setMessage('此帳號已由其他裝置或分頁登入，本連線已停止。', true);
+        showKickedScreen();
+    }
+    function isSessionReplaced(error) {
+        const msg = String(error && (error.message || error.details || '') || '');
+        return msg.includes('GAME_SESSION_REPLACED') || msg.includes('GAME_SESSION_REQUIRED');
+    }
+    async function claimSession(epoch) {
+        if (!client || !userId || kicked) return false;
+        if (!window.crypto || typeof window.crypto.randomUUID !== 'function')
+            throw new Error('此瀏覽器無法建立安全的登入連線 ID');
+        const token = window.crypto.randomUUID();
+        claiming = true;
+        try {
+            const result = await client.rpc('claim_game_session', { p_session: token });
+            if (result.error) throw result.error;
+            if (epoch !== accountEpoch || kicked) return false;
+            sessionToken = token;
+            return true;
+        } finally { claiming = false; }
+    }
+    async function checkSession() {
+        if (!client || !userId || !sessionToken || kicked || claiming) return;
+        const epoch = accountEpoch;
+        try {
+            const result = await client.rpc('game_session_alive', { p_session: sessionToken });
+            if (epoch !== accountEpoch || kicked) return;
+            if (result.error) throw result.error;
+            if (result.data !== true) markKicked();
+        } catch (e) {
+            if (epoch === accountEpoch && isSessionReplaced(e)) markKicked();
+            // Network errors are not a kick; cloud RPCs will fail closed until restored.
+        }
     }
     function readLink() {
         try {
@@ -134,7 +202,7 @@
     }
     function onProgressSaved() {
         // Invoked only after successful existing saveGame/importSave writes.
-        if (!client || !userId) return;
+        if (!client || !userId || kicked) return;
         if (!accountReady) { pendingProgress = true; return; }
         if (!active && !firstUploadArmed) return;
         if (saveScheduled) return;
@@ -153,8 +221,8 @@
         return response.data && response.data.user ? response.data.user : null;
     }
     async function serverRow(uid) {
-        const r = await client.from(TABLE).select('revision,save_data,updated_at')
-            .eq('user_id', uid).maybeSingle();
+        if (!sessionToken || kicked) throw new Error('GAME_SESSION_REQUIRED');
+        const r = await client.rpc('read_game_save', { p_session: sessionToken });
         if (r.error) throw r.error;
         return r.data || null;
     }
@@ -195,11 +263,13 @@
         if (!uid || !possibleClient) {
             accountEpoch++;
             client = null; userId = null; revision = null; active = false;
+            sessionToken = null;
             firstUploadArmed = false; accountReady = false; hasCloud = false;
             pendingProgress = false; lastPayload = null;
             draw();
             return;
         }
+        if (kicked) return; // Only user-initiated reload can reclaim a displaced session.
         if (userId === uid && client === possibleClient) return;
         const epoch = ++accountEpoch;
         client = possibleClient;
@@ -210,6 +280,7 @@
         try {
             const validUser = await verifiedUser();
             if (epoch !== accountEpoch || !validUser || validUser.id !== uid) return;
+            if (!(await claimSession(epoch))) return;
             const row = await serverRow(uid);
             if (epoch !== accountEpoch) return;
             showAccountState(row, uid);
@@ -223,6 +294,7 @@
             }
         } catch (e) {
             if (epoch !== accountEpoch) return;
+            if (isSessionReplaced(e)) { markKicked(); return; }
             accountReady = true; // Still allow offline/local gameplay after a lookup error.
             active = false; firstUploadArmed = false;
             setMessage('無法讀取雲端存檔：' + ((e && e.message) || '連線失敗') +
@@ -266,7 +338,7 @@
         }
     }
     async function restoreCloud(automatic) {
-        if (!client || !userId || busy || !safeToRestore()) return;
+        if (!client || !userId || !sessionToken || kicked || busy || !safeToRestore()) return;
         if (automatic && localHasAnyState()) return;
         busy = true; draw();
         const epoch = accountEpoch, uid = userId;
@@ -285,13 +357,14 @@
             setMessage('雲端進度已還原，即將重新載入遊戲。');
             window.location.reload();
         } catch (e) {
-            setMessage('還原失敗：' + ((e && e.message) || '未知錯誤'), true);
+            if (isSessionReplaced(e)) markKicked();
+            else setMessage('還原失敗：' + ((e && e.message) || '未知錯誤'), true);
         } finally {
             busy = false; draw();
         }
     }
     async function uploadCloud(manual) {
-        if (!client || !userId || busy) return;
+        if (!client || !userId || !sessionToken || kicked || busy) return;
         // The manual override only exists when a remote save already exists.
         if (manual && !hasCloud) return;
         const uid = userId, epoch = accountEpoch;
@@ -333,21 +406,17 @@
                 active = false;
                 throw new Error('雲端已有較新的版本；自動同步已暫停，請先決定使用哪一份進度');
             }
-            if (!row) {
-                result = await client.from(TABLE).insert({ user_id: uid, revision: 1, save_data: bundle })
-                    .select('revision').single();
-                nextRevision = 1;
-            } else {
-                result = await client.from(TABLE).update({
-                    save_data: bundle, revision: row.revision + 1, updated_at: new Date().toISOString()
-                }).eq('user_id', uid).eq('revision', row.revision).select('revision').maybeSingle();
-                if (!result.error && !result.data) {
-                    active = false;
-                    throw new Error('其他裝置剛更新雲端，已拒絕覆蓋');
-                }
-                nextRevision = row.revision + 1;
-            }
+            // Atomic DB-side session verification and revision compare-and-swap.
+            // A kicked client cannot write, even during the five-second polling interval.
+            result = await client.rpc('write_game_save', {
+                p_session: sessionToken,
+                p_expected_revision: row ? row.revision : 0,
+                p_data: bundle
+            });
             if (result.error) throw result.error;
+            nextRevision = Number(result.data);
+            if (!Number.isSafeInteger(nextRevision) || nextRevision < 1)
+                throw new Error('雲端回傳無效的存檔版本');
             if (epoch !== accountEpoch) return;
             writeLink(uid, nextRevision);
             revision = nextRevision;
@@ -357,8 +426,15 @@
             lastPayload = json;
             setMessage('已儲存至雲端（版本 ' + nextRevision + '）。每 60 秒自動同步。');
         } catch (e) {
-            if (epoch === accountEpoch)
-                setMessage('雲端同步失敗：' + ((e && e.message) || '未知錯誤'), true);
+            if (epoch === accountEpoch) {
+                if (isSessionReplaced(e)) markKicked();
+                else {
+                    if (String(e && e.message || '').includes('SAVE_REVISION_CONFLICT')) {
+                        active = false; firstUploadArmed = false;
+                    }
+                    setMessage('雲端同步失敗：' + ((e && e.message) || '未知錯誤'), true);
+                }
+            }
         } finally {
             busy = false; draw();
         }
@@ -374,12 +450,14 @@
         });
         setTimeout(refreshAccount, 0);
         setInterval(function () { uploadCloud(false); }, INTERVAL_MS);
+        setInterval(checkSession, SESSION_CHECK_MS);
         draw();
     }
 
     window.IDLE_CLOUD_SAVE = Object.freeze({
         // Explicitly exported for integration tests; excludes credentials and raw save data.
-        keys: KEYS.slice(), validate: validate, onProgressSaved: onProgressSaved
+        keys: KEYS.slice(), validate: validate, onProgressSaved: onProgressSaved,
+        canSaveLocally: canSaveLocally
     });
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', start, { once: true });
