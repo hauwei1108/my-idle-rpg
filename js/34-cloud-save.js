@@ -477,7 +477,7 @@
             firstUploadArmed = false;
             hasCloud = true;
             lastPayload = json;
-            setMessage('已儲存至雲端（版本 ' + nextRevision + '）。每 60 秒自動同步。');
+            setMessage('已儲存至雲端（版本 ' + nextRevision + '）。每 10 秒自動同步。');
         } catch (e) {
             if (epoch === accountEpoch) {
                 if (isSessionReplaced(e)) markKicked();
