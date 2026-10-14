@@ -84,6 +84,11 @@
 
     async function signIn() {
         if (!client || phase !== 'ready' || user) return;
+        // Switching from guest to Google does not import the guest's local role.
+        // Give the player a chance to export the original role JSON BEFORE OAuth.
+        const cloud = window.IDLE_CLOUD_SAVE;
+        if (cloud && typeof cloud.prepareGoogleSignIn === 'function' &&
+            !cloud.prepareGoogleSignIn()) return;
         if (window.location.protocol !== 'https:' &&
             window.location.hostname !== 'localhost' &&
             window.location.hostname !== '127.0.0.1') {
@@ -118,9 +123,14 @@
         lastError = '';
         render();
         try {
+            const cloud = window.IDLE_CLOUD_SAVE;
+            if (cloud && typeof cloud.beforeGoogleSignOut === 'function') {
+                if (!(await cloud.beforeGoogleSignOut())) throw new Error('雲端存檔尚未完成，已取消登出');
+            }
             const result = await client.auth.signOut();
             if (result && result.error) throw result.error;
             user = null;
+            if (cloud && typeof cloud.afterGoogleSignOut === 'function') cloud.afterGoogleSignOut();
         } catch (e) {
             lastError = (e && e.message) || '登出失敗';
         } finally {
