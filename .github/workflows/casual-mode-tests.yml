@@ -19,4 +19,6 @@ jobs:
         run: |
           for f in js/*.js; do node --check "$f" || exit 1; done
       - name: Unit and integration markers
-        run: node tests/casual-mode.test.cjs
+        run: |
+          node tests/casual-mode.test.cjs
+          node --test tests/google-auth.test.cjs
