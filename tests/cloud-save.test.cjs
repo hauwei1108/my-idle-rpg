@@ -98,7 +98,8 @@ test('snapshot only includes the known game storage keys, never OAuth tokens',as
     const h=createHarness({local:[['lineage_idle_save_1',save],['sb-project-auth-token','do-not-upload']]});
     await h.settle();
     assert.equal(h.db.row,null);
-    await h.click('cloud-save-upload');
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();
+    await h.settle();
     assert.equal(h.db.inserts,1);
     assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,save);
     assert.equal(h.db.row.save_data.entries['sb-project-auth-token'],undefined);
@@ -116,7 +117,7 @@ test('unlinked cloud save is not automatically overwritten',async()=>{
     await h.settle();await h.interval();
     assert.equal(h.db.updates,0);
     assert.equal(h.db.row.revision,3);
-    assert.match(h.elems['cloud-save-status'].textContent,/請選擇上傳本機或下載雲端/);
+    assert.match(h.elems['cloud-save-status'].textContent,/下載雲端存檔/);
 });
 test('successful restore backs up local and reloads with cloud save',async()=>{
     const remote='SIG1:test:'+JSON.stringify({v:2,p:{cls:'mage',lv:20},ms:{current:'town_giran'}});
@@ -144,16 +145,72 @@ test('invalid or injected cloud keys are rejected',async()=>{
     assert.throws(()=>validate({format:'idle-rpg-cloud-bundle',schema:1,entries:{'sb-auth-token':'secret'}}),/無法識別/);
     assert.throws(()=>validate({format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:'broken'}}),/有效角色|JSON/);
 });
-test('an account switch pauses sync and requires explicit action',async()=>{
+test('an account switch does not transfer old account saves',async()=>{
     const local=[['lineage_idle_save_1',save],['fb5_cloud_link_owner_v1',JSON.stringify({uid:'old-user',revision:7})]];
-    const h=createHarness({local,uid:'user-1'});await h.settle();await h.interval();
+    const h=createHarness({local,uid:'user-1'});await h.settle();
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.interval();
     assert.equal(h.db.inserts,0);
-    assert.match(h.elems['cloud-save-status'].textContent,/上傳本機/);
-    await h.click('cloud-save-upload');assert.equal(h.db.inserts,1);
+    assert.match(h.elems['cloud-save-status'].textContent,/其他 Google 帳號/);
+    assert.equal(h.elems['cloud-save-upload'].hidden,true);
 });
-test('active role must save successfully before upload',async()=>{
+test('active role must save successfully before auto upload',async()=>{
     const h=createHarness({local:[['lineage_idle_save_1',save]],playing:true,failedSave:true});
-    await h.settle();await h.click('cloud-save-upload');
+    await h.settle();
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
     assert.equal(h.db.inserts,0);
     assert.ok(h.saveAttempts>0);
+});
+test('new Google account auto-binds after character creation without a manual button',async()=>{
+    const h=createHarness({local:[]});
+    await h.settle();
+    assert.equal(h.db.inserts,0);
+    assert.equal(h.elems['cloud-save-upload'].hidden,true);
+    assert.match(h.elems['cloud-save-status'].textContent,/首次存檔會自動綁定/);
+    h.data.set('lineage_idle_save_1',save);
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
+    assert.equal(h.db.inserts,1);
+    assert.equal(h.db.row.revision,1);
+    assert.equal(h.db.row.user_id,'user-1');
+    assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,save);
+});
+test('successful JSON import auto-binds existing JSON to the signed-in user',async()=>{
+    const h=createHarness({local:[]});await h.settle();
+    h.data.set('lineage_idle_save_7',save);
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
+    assert.equal(h.db.inserts,1);
+    assert.equal(h.db.row.save_data.entries.lineage_idle_save_7,save);
+});
+test('an empty browser with existing cloud save restores automatically',async()=>{
+    const h=createHarness({local:[],cloud:{
+        revision:8,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_4:save}}
+    }});await h.settle();
+    assert.equal(h.data.get('lineage_idle_save_4'),save);
+    assert.equal(JSON.parse(h.data.get('fb5_cloud_link_owner_v1')).revision,8);
+    assert.equal(h.reloads,1);
+    assert.equal(h.backupDownloads,0);
+    assert.equal(h.db.updates,0);
+});
+test('local data is never replaced without consent',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:{
+        revision:5,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:save}}
+    }});await h.settle();
+    assert.equal(h.reloads,0);
+    assert.equal(h.data.get('lineage_idle_save_1'),save);
+    assert.equal(h.data.has('lineage_idle_save_2'),false);
+    assert.equal(h.elems['cloud-save-restore'].hidden,false);
+});
+test('guests never upload even after saving progress',async()=>{
+    const h=createHarness({local:[],uid:null});await h.settle();
+    h.data.set('lineage_idle_save_1',save);
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.interval();
+    assert.equal(h.db.inserts,0);
+});
+test('existing game save and import paths both notify the cloud layer after successful local writes',()=>{
+    const code=fs.readFileSync(path.join(__dirname,'..','js','13-shop-save.js'),'utf8');
+    const saveFn=code.slice(code.indexOf('function saveGame()'),code.indexOf('function consolidateInventory()'));
+    assert.ok(saveFn.includes('onProgressSaved()'));
+    assert.ok(saveFn.indexOf('onProgressSaved()')>saveFn.indexOf('logSys('));
+    const importFn=code.slice(code.indexOf('function importSave(n)'),code.indexOf('const CREATION_CLASS_ANIM_FRAMES'));
+    assert.ok(importFn.includes('onProgressSaved()'));
+    assert.ok(importFn.indexOf('onProgressSaved()')>importFn.indexOf('renderLoadSelect();'));
 });
