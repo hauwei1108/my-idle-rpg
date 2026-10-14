@@ -223,7 +223,7 @@
             }
         } catch (e) {
             if (epoch !== accountEpoch) return;
-            accountReady = false;
+            accountReady = true; // Still allow offline/local gameplay after a lookup error.
             active = false; firstUploadArmed = false;
             setMessage('無法讀取雲端存檔：' + ((e && e.message) || '連線失敗') +
                 '。已停止自動上傳，請稍後重試。', true);
