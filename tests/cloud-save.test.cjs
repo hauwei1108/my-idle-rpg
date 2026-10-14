@@ -112,6 +112,7 @@ function createHarness(opts = {}) {
     return {data,db,elems,timers,window,get backupDownloads(){return backupDownloads;},
         get reloads(){return reloads;},get saveAttempts(){return saveAttempts;},
         setAccount(id){account=id?{id,email:'example@example.test'}:null;window.dispatchEvent(new window.Event('idle-google-auth-change'));},
+        setPlaying(playing){opts.playing=!!playing;sandbox.player.cls=playing?'knight':null;},
         async settle(){for(let i=0;i<7;i++)await tick();},
         async hide(){ document.hidden=true; if(documentListeners.has('visibilitychange')) documentListeners.get('visibilitychange')(); await this.settle(); },
         async click(id){await elems[id].click();await this.settle();},
@@ -184,8 +185,9 @@ test('a new Google account starts empty instead of inheriting the previous accou
     assert.equal(h.elems['cloud-save-upload'].hidden,true);
 });
 test('active role must save successfully before auto upload',async()=>{
-    const h=createHarness({local:[],playing:true,failedSave:true});
+    const h=createHarness({local:[],playing:false,failedSave:true});
     await h.settle();
+    h.setPlaying(true);
     h.data.set('lineage_idle_save_1',save);
     h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
     assert.equal(h.db.inserts,0);
@@ -332,6 +334,7 @@ test('old session cannot write even before the next polling check',async()=>{
     await old.settle();
     const newer=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
     await newer.settle();
+    old.data.set('lineage_idle_save_1',save);
     old.window.IDLE_CLOUD_SAVE.onProgressSaved();await old.settle();
     assert.equal(db.inserts,0);
     assert.equal(old.window.IDLE_CLOUD_SAVE.canSaveLocally(),false);
