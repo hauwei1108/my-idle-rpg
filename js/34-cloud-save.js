@@ -228,6 +228,25 @@
             return raw ? JSON.parse(raw) : null;
         } catch (_) { return null; }
     }
+    function hasPlayerOwnedData() {
+        if (localHasProgress()) return true;
+        for (const key of KEYS) {
+            if (/^lineage_idle_save_[1-8]$/.test(key)) continue;
+            const raw = _lzGet(key);
+            if (raw == null) continue;
+            if (key !== 'fb5_pandora_relic_market_v1') return true;
+            try {
+                const unwrapped = _saveUnwrap(raw);
+                if (!unwrapped || !unwrapped.ok) return true;
+                const market = JSON.parse(unwrapped.payload);
+                if (!market || Number(market.diamonds) > 0 ||
+                    (Array.isArray(market.boards) && market.boards.some(
+                        board => board && (board.contract || Number(board.cooldownUntil) > 0)
+                    ))) return true;
+            } catch (_) { return true; }
+        }
+        return false;
+    }
     function prepareGoogleSignIn() {
         // No silent migration of guest saves into a Google account.
         if (isPlaying()) {
@@ -237,7 +256,7 @@
             }
         }
         const link = readLink();
-        if (localHasProgress() && !link) {
+        if (hasPlayerOwnedData() && !link) {
             const yes = window.confirm(
                 '即將切換為 Google 帳號進度。\n\n' +
                 '目前的訪客角色不會自動綁定 Google 帳號，也不會取代雲端進度。' +
@@ -251,7 +270,8 @@
     }
     function prepareReplacement(uid) {
         const link = readLink();
-        if (!localHasProgress() || (link && link.uid === uid)) return true;
+        if (link && link.uid === uid) return true;
+        if (!hasPlayerOwnedData() && !(link && link.uid !== uid)) return true;
         const notice = takeTabValue(NOTICE_KEY);
         if (notice && Date.now() - Number(notice.at || 0) < 10 * 60 * 1000) return true;
         // Covers an older browser session where OAuth had already been established
