@@ -48,16 +48,19 @@
         logout.hidden = !user;
         logout.disabled = busy;
         start.textContent = user ? '開始遊戲（已登入）' : '開始遊戲（訪客）';
+        // Never show a cached cloud/guest character while OAuth or remote restore is pending.
+        start.disabled = busy || (!!user && !(window.IDLE_CLOUD_SAVE &&
+            window.IDLE_CLOUD_SAVE.isReady && window.IDLE_CLOUD_SAVE.isReady()));
 
         if (lastError) status.textContent = 'Google 登入發生問題：' + lastError + '。你仍可使用本機角色。';
         else if (user) status.textContent = '已登入：' +
             (typeof user.email === 'string' && user.email ? user.email : 'Google 使用者') +
-            '。遊戲進度將自動綁定此帳號並同步至雲端。';
+            '。遊戲將以此帳號的雲端進度為準。';
         else if (phase === 'unconfigured') status.textContent =
             '尚未設定 Google 登入；訪客模式與本機存檔正常可用。';
         else if (phase === 'loading') status.textContent = '正在連線至帳號驗證服務…';
         else if (phase === 'signing-in') status.textContent = '登入中，請稍候…';
-        else status.textContent = '尚未登入。可選擇 Google 登入或以訪客身份遊玩；存檔均保留在本機。';
+        else status.textContent = '尚未登入。訪客只存本機，切換 Google 前請先匯出訪客進度。';
         if (typeof window.dispatchEvent === 'function' && typeof window.Event === 'function')
             window.dispatchEvent(new window.Event('idle-google-auth-change'));
     }
@@ -84,6 +87,11 @@
 
     async function signIn() {
         if (!client || phase !== 'ready' || user) return;
+        // Switching from guest to Google does not import the guest's local role.
+        // Give the player a chance to export the original role JSON BEFORE OAuth.
+        const cloud = window.IDLE_CLOUD_SAVE;
+        if (cloud && typeof cloud.prepareGoogleSignIn === 'function' &&
+            !cloud.prepareGoogleSignIn()) return;
         if (window.location.protocol !== 'https:' &&
             window.location.hostname !== 'localhost' &&
             window.location.hostname !== '127.0.0.1') {
@@ -118,9 +126,14 @@
         lastError = '';
         render();
         try {
+            const cloud = window.IDLE_CLOUD_SAVE;
+            if (cloud && typeof cloud.beforeGoogleSignOut === 'function') {
+                if (!(await cloud.beforeGoogleSignOut())) throw new Error('雲端存檔尚未完成，已取消登出');
+            }
             const result = await client.auth.signOut();
             if (result && result.error) throw result.error;
             user = null;
+            if (cloud && typeof cloud.afterGoogleSignOut === 'function') cloud.afterGoogleSignOut();
         } catch (e) {
             lastError = (e && e.message) || '登出失敗';
         } finally {
