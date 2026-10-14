@@ -72,6 +72,7 @@ function createHarness(opts = {}) {
         auth:{async getUser(){return {data:{user:account},error:null};}}
     };
     const listeners = new Map();
+    const documentListeners = new Map();
     const window = {
         fableStore:null,
         crypto:{randomUUID:nextToken},
@@ -85,6 +86,8 @@ function createHarness(opts = {}) {
     };
     const document={
         readyState:'complete',
+        hidden:!!opts.hidden,
+        addEventListener(name,fn){documentListeners.set(name,fn);},
         getElementById(k){return elems[k]||null;},
         createElement(){return{click(){backupDownloads++;},remove(){},setAttribute(){},appendChild(){},addEventListener(){},style:{},set href(v){},set download(v){}};},
         body:{appendChild(){}}
@@ -106,6 +109,7 @@ function createHarness(opts = {}) {
         get reloads(){return reloads;},get saveAttempts(){return saveAttempts;},
         setAccount(id){account=id?{id,email:'example@example.test'}:null;window.dispatchEvent(new window.Event('idle-google-auth-change'));},
         async settle(){for(let i=0;i<7;i++)await tick();},
+        async hide(){ document.hidden=true; if(documentListeners.has('visibilitychange')) documentListeners.get('visibilitychange')(); await this.settle(); },
         async click(id){await elems[id].click();await this.settle();},
         async interval(){for(const fn of timers)await fn();await this.settle();}
     };
@@ -321,4 +325,43 @@ test('old session cannot write even before the next polling check',async()=>{
     old.window.IDLE_CLOUD_SAVE.onProgressSaved();await old.settle();
     assert.equal(db.inserts,0);
     assert.equal(old.window.IDLE_CLOUD_SAVE.canSaveLocally(),false);
+});
+test('active gameplay syncs every ten seconds instead of the old sixty-second interval',()=>{
+    assert.match(source,/const INTERVAL_MS = 10000;/);
+    assert.match(source,/setInterval\(function \(\) \{ if \(active\) uploadCloud\(false\); \}, INTERVAL_MS\)/);
+});
+test('backgrounding a tab initiates cloud flush for current role',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save]]});
+    await h.settle();
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();
+    await h.settle();
+    assert.equal(h.db.row.revision,1);
+    const advanced='SIG1:test:'+JSON.stringify({v:2,p:{cls:'knight',lv:61},ms:{current:'town_giran'}});
+    h.data.set('lineage_idle_save_1',advanced);
+    await h.hide();
+    assert.equal(h.db.row.revision,2);
+    assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,advanced);
+});
+test('new gameplay that arrives during cloud upload remains queued for follow-up sync',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save]]});
+    await h.settle();h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
+    const advanced='SIG1:test:'+JSON.stringify({v:2,p:{cls:'knight',lv:61},ms:{current:'town_giran'}});
+    h.data.set('lineage_idle_save_1',advanced);
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();
+    await h.settle();
+    assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,advanced);
+});
+test('a displaced player receives a final local save even though cloud writes are blocked',async()=>{
+    const db={row:null,inserts:0,updates:0,sessionId:null,claims:0};
+    const old=createHarness({sharedDb:db,playing:true,local:[['lineage_idle_save_1',save]]});
+    await old.settle();
+    // First cloud upload calls the normal local save.
+    old.window.IDLE_CLOUD_SAVE.onProgressSaved();await old.settle();
+    const previousSaves=old.saveAttempts;
+    const newer=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    await newer.settle();
+    await old.interval();
+    assert.equal(old.window.IDLE_CLOUD_SAVE.canSaveLocally(),false);
+    assert.ok(old.saveAttempts > previousSaves,'old session must flush current player to local disk before kick');
+    assert.equal(db.updates,0,'stale session cannot upload after a new claim');
 });
