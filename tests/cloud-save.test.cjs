@@ -10,9 +10,13 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const role = JSON.stringify({v:2, p:{cls:'knight', lv:60}, ms:{current:'town_silver_knight'}});
 const save = 'SIG1:test:' + role;
+let tokenSeq=0;
+function nextToken(){return '00000000-0000-4000-8000-'+String(++tokenSeq).padStart(12,'0');}
+
 function createHarness(opts = {}) {
     const data = new Map(opts.local || []);
-    const db = {row: opts.cloud || null, updates:0, inserts:0};
+    const db = opts.sharedDb || {row:opts.cloud || null,updates:0,inserts:0,sessionId:null,claims:0};
+    if(!Object.prototype.hasOwnProperty.call(db,'sessionId'))db.sessionId=null;
     const uid = opts.uid === undefined ? 'user-1' : opts.uid;
     let account = uid ? {id:uid,email:'example@example.test'} : null;
     let shouldConfirm = opts.confirm !== false;
@@ -28,6 +32,21 @@ function createHarness(opts = {}) {
     const localStorage={getItem(k){return data.has(k)?data.get(k):null;},
         setItem(k,v){data.set(k,String(v));},removeItem(k){data.delete(k);}};
     const methods={
+        async rpc(name,args) {
+            if(name==='claim_game_session'){db.sessionId=args.p_session;db.claims++;return {data:true,error:null};}
+            if(name==='game_session_alive')return {data:db.sessionId===args.p_session,error:null};
+            if(db.sessionId!==args.p_session)return {data:null,error:{message:'GAME_SESSION_REPLACED'}};
+            if(name==='read_game_save')return {data:db.row?{...db.row}:null,error:null};
+            if(name==='write_game_save'){
+                const old=args.p_expected_revision;
+                if((db.row?db.row.revision:0)!==old)return {data:null,error:{message:'SAVE_REVISION_CONFLICT'}};
+                const rev=old+1;
+                db.row={user_id:'user-1',save_data:args.p_data,revision:rev};
+                if(old===0)db.inserts++;else db.updates++;
+                return {data:rev,error:null};
+            }
+            throw Error('Unexpected RPC '+name);
+        },
         from(table) {
             assert.equal(table, 'game_saves');
             return {
@@ -55,6 +74,7 @@ function createHarness(opts = {}) {
     const listeners = new Map();
     const window = {
         fableStore:null,
+        crypto:{randomUUID:nextToken},
         localStorage,
         Event:class{constructor(type){this.type=type;}},
         IDLE_GOOGLE_AUTH:{getClient(){return account?methods:null;},getUser(){return account;}},
@@ -66,11 +86,11 @@ function createHarness(opts = {}) {
     const document={
         readyState:'complete',
         getElementById(k){return elems[k]||null;},
-        createElement(){return{click(){backupDownloads++;},remove(){},set href(v){},set download(v){}};},
+        createElement(){return{click(){backupDownloads++;},remove(){},setAttribute(){},appendChild(){},addEventListener(){},style:{},set href(v){},set download(v){}};},
         body:{appendChild(){}}
     };
     const URLStub={createObjectURL(){return 'blob:test';},revokeObjectURL(){}};
-    const sandbox={window,document,URL:URLStub,Blob,Date,JSON,console,setTimeout(fn){Promise.resolve().then(fn);return 1;},
+    const sandbox={window,document,URL:URLStub,Blob,Date,JSON,console,state:{running:true},setTimeout(fn){Promise.resolve().then(fn);return 1;},
         setInterval(fn){timers.push(fn);return 1;},
         _lzGet(key){return localStorage.getItem(key);},
         _lzSet(key,value){localStorage.setItem(key,value);return true;},
@@ -213,4 +233,31 @@ test('existing game save and import paths both notify the cloud layer after succ
     const importFn=code.slice(code.indexOf('function importSave(n)'),code.indexOf('const CREATION_CLASS_ANIM_FRAMES'));
     assert.ok(importFn.includes('onProgressSaved()'));
     assert.ok(importFn.indexOf('onProgressSaved()')>importFn.indexOf('renderLoadSelect();'));
+});
+
+test('new login kicks existing browser and prevents older saves',async()=>{
+    const db={row:null,inserts:0,updates:0,sessionId:null,claims:0};
+    const first=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    await first.settle();
+    first.window.IDLE_CLOUD_SAVE.onProgressSaved();await first.settle();
+    assert.equal(db.inserts,1);
+    const firstToken=db.sessionId;
+    const second=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    await second.settle();
+    assert.notEqual(db.sessionId,firstToken);
+    await first.interval();
+    assert.equal(first.window.IDLE_CLOUD_SAVE.canSaveLocally(),false);
+    first.window.IDLE_CLOUD_SAVE.onProgressSaved();await first.interval();
+    assert.equal(db.updates,0);
+    assert.equal(second.window.IDLE_CLOUD_SAVE.canSaveLocally(),true);
+});
+test('old session cannot write even before the next polling check',async()=>{
+    const db={row:null,inserts:0,updates:0,sessionId:null,claims:0};
+    const old=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    await old.settle();
+    const newer=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    await newer.settle();
+    old.window.IDLE_CLOUD_SAVE.onProgressSaved();await old.settle();
+    assert.equal(db.inserts,0);
+    assert.equal(old.window.IDLE_CLOUD_SAVE.canSaveLocally(),false);
 });
