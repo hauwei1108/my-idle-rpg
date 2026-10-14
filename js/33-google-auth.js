@@ -55,12 +55,12 @@
         if (lastError) status.textContent = 'Google 登入發生問題：' + lastError + '。你仍可使用本機角色。';
         else if (user) status.textContent = '已登入：' +
             (typeof user.email === 'string' && user.email ? user.email : 'Google 使用者') +
-            '。遊戲進度將自動綁定此帳號並同步至雲端。';
+            '。遊戲將以此帳號的雲端進度為準。';
         else if (phase === 'unconfigured') status.textContent =
             '尚未設定 Google 登入；訪客模式與本機存檔正常可用。';
         else if (phase === 'loading') status.textContent = '正在連線至帳號驗證服務…';
         else if (phase === 'signing-in') status.textContent = '登入中，請稍候…';
-        else status.textContent = '尚未登入。可選擇 Google 登入或以訪客身份遊玩；存檔均保留在本機。';
+        else status.textContent = '尚未登入。訪客只存本機，切換 Google 前請先匯出訪客進度。';
         if (typeof window.dispatchEvent === 'function' && typeof window.Event === 'function')
             window.dispatchEvent(new window.Event('idle-google-auth-change'));
     }
