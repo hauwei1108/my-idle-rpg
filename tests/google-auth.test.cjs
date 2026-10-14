@@ -94,7 +94,7 @@ test('session restores identity safely and logout does not touch saves', async (
     assert.equal(h.elements['btn-google-login'].hidden, true);
     assert.equal(h.elements['btn-google-logout'].hidden, false);
     assert.match(h.elements['google-auth-status'].textContent, /<script>/);
-    assert.match(h.elements['google-auth-status'].textContent, /不會上傳本機存檔/);
+    assert.match(h.elements['google-auth-status'].textContent, /自動綁定此帳號並同步至雲端/);
     await h.elements['btn-google-logout'].click();
     assert.equal(h.signouts, 1);
     assert.equal(h.elements['btn-google-login'].hidden, false);

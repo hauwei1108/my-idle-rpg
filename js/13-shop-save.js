@@ -762,6 +762,9 @@ function importSave(n){
                 } catch(e){}
             }
             renderLoadSelect();   // 重新整理存檔位清單（更新名稱/等級與可載入狀態）
+            // 匯入及所有共用資料都成功落地後，才通知 Google 雲端首次綁定／同步。
+            if (window.IDLE_CLOUD_SAVE && typeof window.IDLE_CLOUD_SAVE.onProgressSaved === 'function')
+                window.IDLE_CLOUD_SAVE.onProgressSaved();
             let ns = slotSummary(n);
             alert(`已匯入到存檔 ${n}：${ns ? (ns.cls + ' Lv.' + ns.lv + '　' + ns.name) : '完成'}。${whMsg}${petMsg}${pandoraMsg}${clanMsg}`);
         };
@@ -1495,6 +1498,10 @@ function _mercMonotonicExpGuard() {
     } catch (e) {}
 }
 function saveGame() {
+    // 後登入優先：被另一個 Google 連線取代的舊分頁禁止再寫本機角色。
+    if (typeof window !== 'undefined' && window.IDLE_CLOUD_SAVE &&
+        typeof window.IDLE_CLOUD_SAVE.canSaveLocally === 'function' &&
+        !window.IDLE_CLOUD_SAVE.canSaveLocally()) return false;
     // 死亡狀態不寫檔：避免把 player.dead=true 存進去，導致下次讀檔卡在死亡狀態而不出怪。
     // 死亡期間沒有可保存的進度，保留上一份「存活」存檔即可。
     if (player && player.dead) return false;
@@ -1555,6 +1562,10 @@ function saveGame() {
     if(typeof petRosterSave === 'function' && !petRosterSave()) throw new Error('pet roster write failed');
     logSys(`遊戲進度已儲存。`);
     _saveFailureNotified = false;
+    // 不更動原有的存檔流程。只有本機成功儲存後才通知雲端同步。
+    if (typeof window !== 'undefined' && window.IDLE_CLOUD_SAVE &&
+        typeof window.IDLE_CLOUD_SAVE.onProgressSaved === 'function')
+        window.IDLE_CLOUD_SAVE.onProgressSaved();
     return true;
     } catch(e) {
         try { console.error('[saveGame] failed', e); } catch(_e) {}

@@ -1,5 +1,5 @@
 /* Google sign-in for the static GitHub Pages build.
- * Identity only (Phase 1). Game saves and shared local data are NOT synchronized.
+ * Identity is linked to the separate optional cloud JSON save module.
  * OAuth is handled by Supabase Auth with PKCE and browser-persisted sessions.
  */
 (function () {
@@ -52,7 +52,7 @@
         if (lastError) status.textContent = 'Google 登入發生問題：' + lastError + '。你仍可使用本機角色。';
         else if (user) status.textContent = '已登入：' +
             (typeof user.email === 'string' && user.email ? user.email : 'Google 使用者') +
-            '。本階段不會上傳本機存檔。';
+            '。遊戲進度將自動綁定此帳號並同步至雲端。';
         else if (phase === 'unconfigured') status.textContent =
             '尚未設定 Google 登入；訪客模式與本機存檔正常可用。';
         else if (phase === 'loading') status.textContent = '正在連線至帳號驗證服務…';

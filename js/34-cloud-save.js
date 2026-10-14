@@ -8,6 +8,7 @@
     const LINK_KEY = 'fb5_cloud_link_owner_v1';
     const MAX_JSON_CHARS = 12 * 1024 * 1024;
     const INTERVAL_MS = 60000;
+    const SESSION_CHECK_MS = 5000;
 
     const KEYS = [];
     for (let n = 1; n <= 8; n++) KEYS.push('lineage_idle_save_' + n);
@@ -34,10 +35,18 @@
     let userId = null;
     let revision = null;
     let active = false;
+    let firstUploadArmed = false;
+    let accountReady = false;
+    let hasCloud = false;
+    let pendingProgress = false;
+    let saveScheduled = false;
     let busy = false;
+    let sessionToken = null;
+    let kicked = false;
+    let claiming = false;
     let accountEpoch = 0;
     let lastPayload = null;
-    let lastMessage = 'Google 登入後，可上傳本機存檔或下載雲端存檔。';
+    let lastMessage = 'Google 登入後，建立角色或匯入進度便會自動綁定帳號。';
     let lastError = false;
 
     function $(id) { return document.getElementById(id); }
@@ -50,10 +59,79 @@
         const upload = $('cloud-save-upload'), restore = $('cloud-save-restore'), status = $('cloud-save-status');
         if (!upload || !restore || !status) return;
         const signedIn = !!client && !!userId && !window.fableStore;
-        upload.hidden = restore.hidden = !signedIn;
+        // Manual upload is reserved for resolving an existing-cloud conflict.
+        upload.hidden = !(signedIn && accountReady && hasCloud && !active);
+        upload.textContent = '以本機進度覆蓋雲端';
+        restore.hidden = !(signedIn && accountReady && hasCloud);
         upload.disabled = restore.disabled = busy;
-        status.textContent = signedIn ? lastMessage : '訪客模式僅使用本機存檔；Google 登入後可啟用雲端備份。';
+        const start = $('btn-start-menu');
+        if (start) start.disabled = signedIn && (!accountReady || kicked);
+        status.textContent = signedIn ? lastMessage : '訪客模式僅儲存在本機；Google 登入後，進度會自動綁定與備份。';
         status.style.color = lastError ? '#fca5a5' : '#e7d7b5';
+    }
+    function canSaveLocally() { return !kicked; }
+    function showKickedScreen() {
+        const status = $('cloud-save-status');
+        if (status) status.textContent = '此 Google 帳號已在其他裝置或分頁登入，本連線已中止。';
+        if (typeof state !== 'undefined' && state) state.running = false;
+        if ($('cloud-session-kicked')) return;
+        const el = document.createElement('div');
+        el.id = 'cloud-session-kicked';
+        el.setAttribute('role', 'alertdialog');
+        el.setAttribute('aria-modal', 'true');
+        el.style.cssText = 'position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.95);'+
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;'+
+            'font:18px sans-serif;color:#fff;text-align:center;padding:24px;';
+        const heading = document.createElement('h2');
+        heading.textContent = '帳號已在其他裝置登入';
+        const msg = document.createElement('p');
+        msg.textContent = '依照後登入優先規則，這個遊戲連線已被登出。重新整理可重新取得使用權，並踢除其他連線。';
+        const btn = document.createElement('button');
+        btn.textContent = '重新登入此帳號';
+        btn.style.cssText = 'background:#875719;color:white;padding:12px 20px;border:1px solid #d7aa45;cursor:pointer;';
+        btn.addEventListener('click', function () { window.location.reload(); });
+        el.appendChild(heading); el.appendChild(msg); el.appendChild(btn);
+        document.body.appendChild(el);
+    }
+    function markKicked() {
+        if (kicked) return;
+        kicked = true;
+        active = false; firstUploadArmed = false; accountReady = false;
+        pendingProgress = false; sessionToken = null;
+        lastPayload = null;
+        setMessage('此帳號已由其他裝置或分頁登入，本連線已停止。', true);
+        showKickedScreen();
+    }
+    function isSessionReplaced(error) {
+        const msg = String(error && (error.message || error.details || '') || '');
+        return msg.includes('GAME_SESSION_REPLACED') || msg.includes('GAME_SESSION_REQUIRED');
+    }
+    async function claimSession(epoch) {
+        if (!client || !userId || kicked) return false;
+        if (!window.crypto || typeof window.crypto.randomUUID !== 'function')
+            throw new Error('此瀏覽器無法建立安全的登入連線 ID');
+        const token = window.crypto.randomUUID();
+        claiming = true;
+        try {
+            const result = await client.rpc('claim_game_session', { p_session: token });
+            if (result.error) throw result.error;
+            if (epoch !== accountEpoch || kicked) return false;
+            sessionToken = token;
+            return true;
+        } finally { claiming = false; }
+    }
+    async function checkSession() {
+        if (!client || !userId || !sessionToken || kicked || claiming) return;
+        const epoch = accountEpoch;
+        try {
+            const result = await client.rpc('game_session_alive', { p_session: sessionToken });
+            if (epoch !== accountEpoch || kicked) return;
+            if (result.error) throw result.error;
+            if (result.data !== true) markKicked();
+        } catch (e) {
+            if (epoch === accountEpoch && isSessionReplaced(e)) markKicked();
+            // Network errors are not a kick; cloud RPCs will fail closed until restored.
+        }
     }
     function readLink() {
         try {
@@ -117,7 +195,23 @@
         return true;
     }
     function localHasProgress() {
-        return KEYS.some(k => window.localStorage.getItem(k) != null && /^lineage_idle_save_[1-8]$/.test(k));
+        return KEYS.some(k => /^lineage_idle_save_[1-8]$/.test(k) && _lzGet(k) != null);
+    }
+    function localHasAnyState() {
+        return KEYS.some(k => _lzGet(k) != null);
+    }
+    function onProgressSaved() {
+        // Invoked only after successful existing saveGame/importSave writes.
+        if (!client || !userId || kicked) return;
+        if (!accountReady) { pendingProgress = true; return; }
+        if (!active && !firstUploadArmed) return;
+        if (saveScheduled) return;
+        saveScheduled = true;
+        const epoch = accountEpoch;
+        setTimeout(function () {
+            saveScheduled = false;
+            if (accountEpoch === epoch) uploadCloud(false);
+        }, 1200);
     }
     function getAuth() { return window.IDLE_GOOGLE_AUTH || null; }
     async function verifiedUser() {
@@ -127,26 +221,38 @@
         return response.data && response.data.user ? response.data.user : null;
     }
     async function serverRow(uid) {
-        const r = await client.from(TABLE).select('revision,save_data,updated_at')
-            .eq('user_id', uid).maybeSingle();
+        if (!sessionToken || kicked) throw new Error('GAME_SESSION_REQUIRED');
+        const r = await client.rpc('read_game_save', { p_session: sessionToken });
         if (r.error) throw r.error;
         return r.data || null;
     }
     function showAccountState(row, uid) {
         const link = readLink();
+        accountReady = true;
+        hasCloud = !!row;
+        lastPayload = null;
         if (!row) {
-            active = false; revision = null; lastPayload = null;
-            setMessage('這個帳號沒有雲端進度。點「上傳本機」建立第一份備份。');
+            // No cloud save: the NEXT successful import/create/save becomes revision 1.
+            // Do not silently send another Google account's local saves to this UID.
+            firstUploadArmed = !link || link.uid === uid;
+            active = false;
+            revision = null;
+            setMessage(firstUploadArmed
+                ? '此 Google 帳號尚無進度。直接創角或匯入 JSON，首次存檔會自動綁定帳號。'
+                : '本機進度已綁定其他 Google 帳號，已禁止自動轉存；請改用原帳號或獨立瀏覽器設定檔。',
+                !firstUploadArmed);
         } else if (link && link.uid === uid && link.revision === row.revision && localHasProgress()) {
-            active = true; revision = row.revision;
-            lastPayload = null;
-            setMessage('雲端存檔已綁定（版本 ' + revision + '），每 60 秒自動同步。');
+            firstUploadArmed = false;
+            active = true;
+            revision = row.revision;
+            setMessage('已同步 Google 雲端進度（版本 ' + revision + '）。');
         } else {
-            active = false; revision = row.revision;
-            lastPayload = null;
+            firstUploadArmed = false;
+            active = false;
+            revision = row.revision;
             setMessage(link && link.uid && link.uid !== uid
-                ? '本機存檔屬於其他 Google 帳號。建議先下載此帳號的雲端進度。'
-                : '偵測到雲端進度（版本 ' + row.revision + '）。請選擇上傳本機或下載雲端，避免自動覆蓋。');
+                ? '這台電腦仍有其他 Google 帳號的本機資料。請先處理原進度，再下載目前帳號雲端存檔。'
+                : '找到雲端進度（版本 ' + row.revision + '）。本機已有不同進度，請選擇「下載雲端存檔」避免覆蓋。');
         }
     }
     async function refreshAccount() {
@@ -156,26 +262,43 @@
         const uid = possibleClient && possibleUser && possibleUser.id ? possibleUser.id : null;
         if (!uid || !possibleClient) {
             accountEpoch++;
-            client = null; userId = null; revision = null; active = false; lastPayload = null;
+            client = null; userId = null; revision = null; active = false;
+            sessionToken = null;
+            firstUploadArmed = false; accountReady = false; hasCloud = false;
+            pendingProgress = false; lastPayload = null;
             draw();
             return;
         }
+        if (kicked) return; // Only user-initiated reload can reclaim a displaced session.
         if (userId === uid && client === possibleClient) return;
         const epoch = ++accountEpoch;
         client = possibleClient;
         userId = uid;
-        active = false;
-        setMessage('正在確認雲端存檔…');
+        active = false; accountReady = false; firstUploadArmed = false; hasCloud = false;
+        pendingProgress = false;
+        setMessage('正在確認 Google 帳號的雲端進度…');
         try {
             const validUser = await verifiedUser();
             if (epoch !== accountEpoch || !validUser || validUser.id !== uid) return;
+            if (!(await claimSession(epoch))) return;
             const row = await serverRow(uid);
             if (epoch !== accountEpoch) return;
             showAccountState(row, uid);
+            if (row && !localHasAnyState() && safeToRestore()) {
+                await restoreCloud(true);
+                return;
+            }
+            if (!row && pendingProgress && firstUploadArmed) {
+                pendingProgress = false;
+                onProgressSaved();
+            }
         } catch (e) {
             if (epoch !== accountEpoch) return;
-            active = false;
-            setMessage('無法讀取雲端存檔：' + ((e && e.message) || '連線失敗'), true);
+            if (isSessionReplaced(e)) { markKicked(); return; }
+            accountReady = true; // Still allow offline/local gameplay after a lookup error.
+            active = false; firstUploadArmed = false;
+            setMessage('無法讀取雲端存檔：' + ((e && e.message) || '連線失敗') +
+                '。已停止自動上傳，請稍後重試。', true);
         }
     }
     function downloadBackup(doc) {
@@ -214,8 +337,9 @@
             throw e;
         }
     }
-    async function restoreCloud() {
-        if (!client || !userId || busy || !safeToRestore()) return;
+    async function restoreCloud(automatic) {
+        if (!client || !userId || !sessionToken || kicked || busy || !safeToRestore()) return;
+        if (automatic && localHasAnyState()) return;
         busy = true; draw();
         const epoch = accountEpoch, uid = userId;
         try {
@@ -224,26 +348,28 @@
             const row = await serverRow(uid);
             if (!row) throw new Error('目前雲端沒有存檔');
             validate(row.save_data);
-            if (!window.confirm('下載雲端存檔將取代這台電腦的 8 格角色及共用資料。系統會先下載本機備份檔；確定還原嗎？')) return;
+            if (!automatic && !window.confirm('下載雲端存檔將取代這台電腦的 8 格角色及共用資料。系統會先下載本機備份檔；確定還原嗎？')) return;
             if (!safeToRestore() || epoch !== accountEpoch) return;
             // Backup BEFORE touching local save data; failure aborts restore.
-            const backup = snapshot();
-            downloadBackup(backup);
+            if (!automatic) downloadBackup(snapshot());
             restoreEntries(row.save_data.entries);
             writeLink(uid, row.revision);
             setMessage('雲端進度已還原，即將重新載入遊戲。');
             window.location.reload();
         } catch (e) {
-            setMessage('還原失敗：' + ((e && e.message) || '未知錯誤'), true);
+            if (isSessionReplaced(e)) markKicked();
+            else setMessage('還原失敗：' + ((e && e.message) || '未知錯誤'), true);
         } finally {
             busy = false; draw();
         }
     }
     async function uploadCloud(manual) {
-        if (!client || !userId || busy) return;
+        if (!client || !userId || !sessionToken || kicked || busy) return;
+        // The manual override only exists when a remote save already exists.
+        if (manual && !hasCloud) return;
         const uid = userId, epoch = accountEpoch;
-        // First-time binding requires an explicit choice. Auto-sync cannot use unlinked data.
-        if (!manual && !active) return;
+        // No cloud save: successful in-game save / JSON import can insert revision 1.
+        if (!manual && !active && !firstUploadArmed) return;
         if (manual) {
             const link = readLink();
             const warning = link && link.uid !== uid
@@ -271,34 +397,44 @@
             let result, nextRevision;
             if (manual) {
                 if (row && !window.confirm('雲端目前已有版本 ' + row.revision + '。再次確認要以本機進度覆蓋雲端嗎？')) return;
+            } else if (firstUploadArmed) {
+                if (row) {
+                    active = false; firstUploadArmed = false; hasCloud = true;
+                    throw new Error('其他裝置已先建立雲端存檔。自動綁定已暫停，避免覆蓋');
+                }
             } else if (!row || row.revision !== revision) {
                 active = false;
                 throw new Error('雲端已有較新的版本；自動同步已暫停，請先決定使用哪一份進度');
             }
-            if (!row) {
-                result = await client.from(TABLE).insert({ user_id: uid, revision: 1, save_data: bundle })
-                    .select('revision').single();
-                nextRevision = 1;
-            } else {
-                result = await client.from(TABLE).update({
-                    save_data: bundle, revision: row.revision + 1, updated_at: new Date().toISOString()
-                }).eq('user_id', uid).eq('revision', row.revision).select('revision').maybeSingle();
-                if (!result.error && !result.data) {
-                    active = false;
-                    throw new Error('其他裝置剛更新雲端，已拒絕覆蓋');
-                }
-                nextRevision = row.revision + 1;
-            }
+            // Atomic DB-side session verification and revision compare-and-swap.
+            // A kicked client cannot write, even during the five-second polling interval.
+            result = await client.rpc('write_game_save', {
+                p_session: sessionToken,
+                p_expected_revision: row ? row.revision : 0,
+                p_data: bundle
+            });
             if (result.error) throw result.error;
+            nextRevision = Number(result.data);
+            if (!Number.isSafeInteger(nextRevision) || nextRevision < 1)
+                throw new Error('雲端回傳無效的存檔版本');
             if (epoch !== accountEpoch) return;
             writeLink(uid, nextRevision);
             revision = nextRevision;
             active = true;
+            firstUploadArmed = false;
+            hasCloud = true;
             lastPayload = json;
             setMessage('已儲存至雲端（版本 ' + nextRevision + '）。每 60 秒自動同步。');
         } catch (e) {
-            if (epoch === accountEpoch)
-                setMessage('雲端同步失敗：' + ((e && e.message) || '未知錯誤'), true);
+            if (epoch === accountEpoch) {
+                if (isSessionReplaced(e)) markKicked();
+                else {
+                    if (String(e && e.message || '').includes('SAVE_REVISION_CONFLICT')) {
+                        active = false; firstUploadArmed = false;
+                    }
+                    setMessage('雲端同步失敗：' + ((e && e.message) || '未知錯誤'), true);
+                }
+            }
         } finally {
             busy = false; draw();
         }
@@ -313,13 +449,17 @@
             setTimeout(refreshAccount, 0);
         });
         setTimeout(refreshAccount, 0);
-        setInterval(function () { uploadCloud(false); }, INTERVAL_MS);
+        // Never bind pre-existing local data merely because 60 seconds elapsed.
+        // First cloud upload must follow successful import/creation/save event.
+        setInterval(function () { if (active) uploadCloud(false); }, INTERVAL_MS);
+        setInterval(checkSession, SESSION_CHECK_MS);
         draw();
     }
 
     window.IDLE_CLOUD_SAVE = Object.freeze({
         // Explicitly exported for integration tests; excludes credentials and raw save data.
-        keys: KEYS.slice(), validate: validate
+        keys: KEYS.slice(), validate: validate, onProgressSaved: onProgressSaved,
+        canSaveLocally: canSaveLocally
     });
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', start, { once: true });
