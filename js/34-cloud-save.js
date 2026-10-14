@@ -283,10 +283,13 @@
         );
     }
     function matchesCloud(row) {
-        const local = snapshot().entries, remote = row.save_data.entries;
-        const keys = Object.keys(local), other = Object.keys(remote);
-        return keys.length === other.length && keys.every(k =>
-            Object.prototype.hasOwnProperty.call(remote, k) && local[k] === remote[k]);
+        // Corrupt local cache must not block a valid cloud save from loading.
+        try {
+            const local = snapshot().entries, remote = row.save_data.entries;
+            const keys = Object.keys(local), other = Object.keys(remote);
+            return keys.length === other.length && keys.every(k =>
+                Object.prototype.hasOwnProperty.call(remote, k) && local[k] === remote[k]);
+        } catch (_) { return false; }
     }
     function markReload(uid, rev) {
         stashTabValue(BOOT_KEY, { uid: uid, revision: rev, at: Date.now() });
@@ -311,7 +314,9 @@
             hasCloud = true;
             revision = Number(row.revision);
             accountReady = true;
-            lastPayload = null;
+            // If local bytes already equal the remote snapshot, don't immediately
+            // upload the same revision again just because the page started.
+            lastPayload = matchesCloud(row) ? JSON.stringify(snapshot()) : null;
             setMessage('已載入 Google 雲端進度（版本 ' + revision + '），後續自動同步。');
         }
     }
@@ -322,7 +327,9 @@
         // User must acknowledge export risk before anything is replaced.
         if (!prepareReplacement(uid)) {
             accountReady = false;
-            setMessage('尚未切換進度。請先匯出訪客 JSON，之後重新登入 Google 帳號。', true);
+            setMessage('已取消切換進度，請先匯出訪客 JSON。', true);
+            // Only this legacy OAuth-callback path signs out: no data is cleared.
+            await client.auth.signOut();
             return;
         }
         const rev = row ? Number(row.revision) : 0;
