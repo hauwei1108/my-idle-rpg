@@ -449,7 +449,9 @@
             setTimeout(refreshAccount, 0);
         });
         setTimeout(refreshAccount, 0);
-        setInterval(function () { uploadCloud(false); }, INTERVAL_MS);
+        // Never bind pre-existing local data merely because 60 seconds elapsed.
+        // First cloud upload must follow successful import/creation/save event.
+        setInterval(function () { if (active) uploadCloud(false); }, INTERVAL_MS);
         setInterval(checkSession, SESSION_CHECK_MS);
         draw();
     }
