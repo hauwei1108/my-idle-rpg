@@ -34,10 +34,15 @@
     let userId = null;
     let revision = null;
     let active = false;
+    let firstUploadArmed = false;
+    let accountReady = false;
+    let hasCloud = false;
+    let pendingProgress = false;
+    let saveScheduled = false;
     let busy = false;
     let accountEpoch = 0;
     let lastPayload = null;
-    let lastMessage = 'Google 登入後，可上傳本機存檔或下載雲端存檔。';
+    let lastMessage = 'Google 登入後，建立角色或匯入進度便會自動綁定帳號。';
     let lastError = false;
 
     function $(id) { return document.getElementById(id); }
@@ -50,9 +55,14 @@
         const upload = $('cloud-save-upload'), restore = $('cloud-save-restore'), status = $('cloud-save-status');
         if (!upload || !restore || !status) return;
         const signedIn = !!client && !!userId && !window.fableStore;
-        upload.hidden = restore.hidden = !signedIn;
+        // Manual upload is reserved for resolving an existing-cloud conflict.
+        upload.hidden = !(signedIn && accountReady && hasCloud && !active);
+        upload.textContent = '以本機進度覆蓋雲端';
+        restore.hidden = !(signedIn && accountReady && hasCloud);
         upload.disabled = restore.disabled = busy;
-        status.textContent = signedIn ? lastMessage : '訪客模式僅使用本機存檔；Google 登入後可啟用雲端備份。';
+        const start = $('btn-start-menu');
+        if (start) start.disabled = signedIn && !accountReady;
+        status.textContent = signedIn ? lastMessage : '訪客模式僅儲存在本機；Google 登入後，進度會自動綁定與備份。';
         status.style.color = lastError ? '#fca5a5' : '#e7d7b5';
     }
     function readLink() {
@@ -117,7 +127,23 @@
         return true;
     }
     function localHasProgress() {
-        return KEYS.some(k => window.localStorage.getItem(k) != null && /^lineage_idle_save_[1-8]$/.test(k));
+        return KEYS.some(k => /^lineage_idle_save_[1-8]$/.test(k) && _lzGet(k) != null);
+    }
+    function localHasAnyState() {
+        return KEYS.some(k => _lzGet(k) != null);
+    }
+    function onProgressSaved() {
+        // Invoked only after successful existing saveGame/importSave writes.
+        if (!client || !userId) return;
+        if (!accountReady) { pendingProgress = true; return; }
+        if (!active && !firstUploadArmed) return;
+        if (saveScheduled) return;
+        saveScheduled = true;
+        const epoch = accountEpoch;
+        setTimeout(function () {
+            saveScheduled = false;
+            if (accountEpoch === epoch) uploadCloud(false);
+        }, 1200);
     }
     function getAuth() { return window.IDLE_GOOGLE_AUTH || null; }
     async function verifiedUser() {
@@ -134,19 +160,31 @@
     }
     function showAccountState(row, uid) {
         const link = readLink();
+        accountReady = true;
+        hasCloud = !!row;
+        lastPayload = null;
         if (!row) {
-            active = false; revision = null; lastPayload = null;
-            setMessage('這個帳號沒有雲端進度。點「上傳本機」建立第一份備份。');
+            // No cloud save: the NEXT successful import/create/save becomes revision 1.
+            // Do not silently send another Google account's local saves to this UID.
+            firstUploadArmed = !link || link.uid === uid;
+            active = false;
+            revision = null;
+            setMessage(firstUploadArmed
+                ? '此 Google 帳號尚無進度。直接創角或匯入 JSON，首次存檔會自動綁定帳號。'
+                : '本機進度已綁定其他 Google 帳號，已禁止自動轉存；請改用原帳號或獨立瀏覽器設定檔。',
+                !firstUploadArmed);
         } else if (link && link.uid === uid && link.revision === row.revision && localHasProgress()) {
-            active = true; revision = row.revision;
-            lastPayload = null;
-            setMessage('雲端存檔已綁定（版本 ' + revision + '），每 60 秒自動同步。');
+            firstUploadArmed = false;
+            active = true;
+            revision = row.revision;
+            setMessage('已同步 Google 雲端進度（版本 ' + revision + '）。');
         } else {
-            active = false; revision = row.revision;
-            lastPayload = null;
+            firstUploadArmed = false;
+            active = false;
+            revision = row.revision;
             setMessage(link && link.uid && link.uid !== uid
-                ? '本機存檔屬於其他 Google 帳號。建議先下載此帳號的雲端進度。'
-                : '偵測到雲端進度（版本 ' + row.revision + '）。請選擇上傳本機或下載雲端，避免自動覆蓋。');
+                ? '這台電腦仍有其他 Google 帳號的本機資料。請先處理原進度，再下載目前帳號雲端存檔。'
+                : '找到雲端進度（版本 ' + row.revision + '）。本機已有不同進度，請選擇「下載雲端存檔」避免覆蓋。');
         }
     }
     async function refreshAccount() {
@@ -156,7 +194,9 @@
         const uid = possibleClient && possibleUser && possibleUser.id ? possibleUser.id : null;
         if (!uid || !possibleClient) {
             accountEpoch++;
-            client = null; userId = null; revision = null; active = false; lastPayload = null;
+            client = null; userId = null; revision = null; active = false;
+            firstUploadArmed = false; accountReady = false; hasCloud = false;
+            pendingProgress = false; lastPayload = null;
             draw();
             return;
         }
@@ -164,18 +204,29 @@
         const epoch = ++accountEpoch;
         client = possibleClient;
         userId = uid;
-        active = false;
-        setMessage('正在確認雲端存檔…');
+        active = false; accountReady = false; firstUploadArmed = false; hasCloud = false;
+        pendingProgress = false;
+        setMessage('正在確認 Google 帳號的雲端進度…');
         try {
             const validUser = await verifiedUser();
             if (epoch !== accountEpoch || !validUser || validUser.id !== uid) return;
             const row = await serverRow(uid);
             if (epoch !== accountEpoch) return;
             showAccountState(row, uid);
+            if (row && !localHasAnyState() && safeToRestore()) {
+                await restoreCloud(true);
+                return;
+            }
+            if (!row && pendingProgress && firstUploadArmed) {
+                pendingProgress = false;
+                onProgressSaved();
+            }
         } catch (e) {
             if (epoch !== accountEpoch) return;
-            active = false;
-            setMessage('無法讀取雲端存檔：' + ((e && e.message) || '連線失敗'), true);
+            accountReady = false;
+            active = false; firstUploadArmed = false;
+            setMessage('無法讀取雲端存檔：' + ((e && e.message) || '連線失敗') +
+                '。已停止自動上傳，請稍後重試。', true);
         }
     }
     function downloadBackup(doc) {
@@ -214,8 +265,9 @@
             throw e;
         }
     }
-    async function restoreCloud() {
+    async function restoreCloud(automatic) {
         if (!client || !userId || busy || !safeToRestore()) return;
+        if (automatic && localHasAnyState()) return;
         busy = true; draw();
         const epoch = accountEpoch, uid = userId;
         try {
@@ -224,11 +276,10 @@
             const row = await serverRow(uid);
             if (!row) throw new Error('目前雲端沒有存檔');
             validate(row.save_data);
-            if (!window.confirm('下載雲端存檔將取代這台電腦的 8 格角色及共用資料。系統會先下載本機備份檔；確定還原嗎？')) return;
+            if (!automatic && !window.confirm('下載雲端存檔將取代這台電腦的 8 格角色及共用資料。系統會先下載本機備份檔；確定還原嗎？')) return;
             if (!safeToRestore() || epoch !== accountEpoch) return;
             // Backup BEFORE touching local save data; failure aborts restore.
-            const backup = snapshot();
-            downloadBackup(backup);
+            if (!automatic) downloadBackup(snapshot());
             restoreEntries(row.save_data.entries);
             writeLink(uid, row.revision);
             setMessage('雲端進度已還原，即將重新載入遊戲。');
@@ -242,8 +293,8 @@
     async function uploadCloud(manual) {
         if (!client || !userId || busy) return;
         const uid = userId, epoch = accountEpoch;
-        // First-time binding requires an explicit choice. Auto-sync cannot use unlinked data.
-        if (!manual && !active) return;
+        // No cloud save: successful in-game save / JSON import can insert revision 1.
+        if (!manual && !active && !firstUploadArmed) return;
         if (manual) {
             const link = readLink();
             const warning = link && link.uid !== uid
@@ -271,6 +322,11 @@
             let result, nextRevision;
             if (manual) {
                 if (row && !window.confirm('雲端目前已有版本 ' + row.revision + '。再次確認要以本機進度覆蓋雲端嗎？')) return;
+            } else if (firstUploadArmed) {
+                if (row) {
+                    active = false; firstUploadArmed = false; hasCloud = true;
+                    throw new Error('其他裝置已先建立雲端存檔。自動綁定已暫停，避免覆蓋');
+                }
             } else if (!row || row.revision !== revision) {
                 active = false;
                 throw new Error('雲端已有較新的版本；自動同步已暫停，請先決定使用哪一份進度');
@@ -294,6 +350,8 @@
             writeLink(uid, nextRevision);
             revision = nextRevision;
             active = true;
+            firstUploadArmed = false;
+            hasCloud = true;
             lastPayload = json;
             setMessage('已儲存至雲端（版本 ' + nextRevision + '）。每 60 秒自動同步。');
         } catch (e) {
@@ -319,7 +377,7 @@
 
     window.IDLE_CLOUD_SAVE = Object.freeze({
         // Explicitly exported for integration tests; excludes credentials and raw save data.
-        keys: KEYS.slice(), validate: validate
+        keys: KEYS.slice(), validate: validate, onProgressSaved: onProgressSaved
     });
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', start, { once: true });
