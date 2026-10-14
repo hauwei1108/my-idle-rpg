@@ -197,8 +197,36 @@
     function localHasProgress() {
         return KEYS.some(k => /^lineage_idle_save_[1-8]$/.test(k) && _lzGet(k) != null);
     }
-    function localHasAnyState() {
-        return KEYS.some(k => _lzGet(k) != null);
+    function hasMeaningfulLocalState(uid) {
+        // A fresh browser may already contain a Pandora market bucket:
+        // wanderingBuyerSystemTick creates it ~1.5s after startup, before
+        // Google OAuth and the cloud lookup have finished.
+        // That NPC-generated bucket is not character progress.
+        const link = readLink();
+        if (link && link.uid !== uid) return true; // Different account: never auto replace.
+        if (localHasProgress()) return true;
+        for (const key of KEYS) {
+            if (/^lineage_idle_save_[1-8]$/.test(key)) continue;
+            const raw = _lzGet(key);
+            if (raw == null) continue;
+            if (key !== 'fb5_pandora_relic_market_v1') return true;
+            // Preserve actual shared Pandora assets even when no role is present.
+            // Only disposable, NPC-generated market data may be replaced silently.
+            try {
+                const verified = _saveUnwrap(raw);
+                if (!verified || !verified.ok || !verified.payload) return true;
+                const market = JSON.parse(verified.payload);
+                if (!market || typeof market !== 'object' || Array.isArray(market))
+                    return true;
+                if (Number(market.diamonds) > 0) return true;
+                if (Array.isArray(market.boards) && market.boards.some(
+                    b => b && (b.contract || Number(b.cooldownUntil) > 0)
+                )) return true;
+            } catch (_) {
+                return true; // Never silently discard malformed or unreadable data.
+            }
+        }
+        return false;
     }
     function onProgressSaved() {
         // Invoked only after successful existing saveGame/importSave writes.
@@ -284,7 +312,7 @@
             const row = await serverRow(uid);
             if (epoch !== accountEpoch) return;
             showAccountState(row, uid);
-            if (row && !localHasAnyState() && safeToRestore()) {
+            if (row && !hasMeaningfulLocalState(uid) && safeToRestore()) {
                 await restoreCloud(true);
                 return;
             }
@@ -339,7 +367,7 @@
     }
     async function restoreCloud(automatic) {
         if (!client || !userId || !sessionToken || kicked || busy || !safeToRestore()) return;
-        if (automatic && localHasAnyState()) return;
+        if (automatic && hasMeaningfulLocalState(userId)) return;
         busy = true; draw();
         const epoch = accountEpoch, uid = userId;
         try {

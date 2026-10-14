@@ -210,6 +210,67 @@ test('an empty browser with existing cloud save restores automatically',async()=
     assert.equal(h.backupDownloads,0);
     assert.equal(h.db.updates,0);
 });
+test('incognito Google login auto-restores even if NPC system initialized Pandora bucket',async()=>{
+    const npcMarket = JSON.stringify({
+        v:3, seed:'auto-generated', diamonds:0, lastCheckBucket:5000,
+        wanderers:[{id:'npc-1',townId:'town_giran'}],
+        boards:[{contract:null,cooldownUntil:0}],
+        nameHistory:[],updatedAt:20000
+    });
+    const cloud={revision:11,save_data:{
+        format:'idle-rpg-cloud-bundle',schema:1,
+        entries:{lineage_idle_save_1:save,'fb5_pandora_relic_market_v1':npcMarket}
+    }};
+    const h=createHarness({local:[['fb5_pandora_relic_market_v1',npcMarket]],cloud});
+    await h.settle();
+    assert.equal(h.data.get('lineage_idle_save_1'),save);
+    assert.equal(JSON.parse(h.data.get('fb5_cloud_link_owner_v1')).revision,11);
+    assert.equal(h.reloads,1);
+    assert.equal(h.backupDownloads,0);
+    assert.equal(h.db.updates,0);
+});
+test('meaningful Pandora diamonds without a role are not overwritten',async()=>{
+    const shared=JSON.stringify({v:3,diamonds:500,boards:[],wanderers:[]});
+    const cloud={revision:2,save_data:{
+        format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:save}
+    }};
+    const h=createHarness({local:[['fb5_pandora_relic_market_v1',shared]],cloud});
+    await h.settle();
+    assert.equal(h.reloads,0);
+    assert.equal(h.data.has('lineage_idle_save_1'),false);
+    assert.equal(h.data.get('fb5_pandora_relic_market_v1'),shared);
+    assert.equal(h.elems['cloud-save-restore'].hidden,false);
+});
+test('Pandora cooldown or contract prevents silent restore',async()=>{
+    const shared=JSON.stringify({diamonds:0,boards:[{contract:{itemId:'sword'},cooldownUntil:0}]});
+    const h=createHarness({local:[['fb5_pandora_relic_market_v1',shared]],cloud:{
+        revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:save}}
+    }});
+    await h.settle();
+    assert.equal(h.reloads,0);
+});
+test('corrupted shared NPC bucket is preserved, not automatically wiped',async()=>{
+    const h=createHarness({local:[['fb5_pandora_relic_market_v1','broken json']],cloud:{
+        revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_3:save}}
+    }});
+    await h.settle();
+    assert.equal(h.reloads,0);
+    assert.equal(h.data.get('fb5_pandora_relic_market_v1'),'broken json');
+});
+test('a different Google account link prevents silent restore even with only NPC cache',async()=>{
+    const npc=JSON.stringify({diamonds:0,boards:[]});
+    const local=[
+        ['fb5_pandora_relic_market_v1',npc],
+        ['fb5_cloud_link_owner_v1',JSON.stringify({uid:'other-account',revision:2})]
+    ];
+    const h=createHarness({local,cloud:{
+        revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_5:save}}
+    }});
+    await h.settle();
+    assert.equal(h.reloads,0);
+    assert.equal(h.data.has('lineage_idle_save_5'),false);
+});
+
 test('local data is never replaced without consent',async()=>{
     const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:{
         revision:5,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:save}}
