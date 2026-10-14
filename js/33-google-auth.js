@@ -48,6 +48,9 @@
         logout.hidden = !user;
         logout.disabled = busy;
         start.textContent = user ? '開始遊戲（已登入）' : '開始遊戲（訪客）';
+        // Never show a cached cloud/guest character while OAuth or remote restore is pending.
+        start.disabled = busy || (!!user && !(window.IDLE_CLOUD_SAVE &&
+            window.IDLE_CLOUD_SAVE.isReady && window.IDLE_CLOUD_SAVE.isReady()));
 
         if (lastError) status.textContent = 'Google 登入發生問題：' + lastError + '。你仍可使用本機角色。';
         else if (user) status.textContent = '已登入：' +
