@@ -14,8 +14,25 @@
     <title>放置天堂 - 日出之國</title>
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <style>
-      #main-menu > button[hidden] { display: none !important; }
+      #main-menu > button[hidden], #cloud-save-panel [hidden] { display: none !important; }
       #google-auth-status { overflow-wrap: anywhere; }
+      #cloud-save-panel {
+        position:absolute;z-index:5;top:6%;right:2.8%;width:30%;box-sizing:border-box;
+        display:flex;flex-direction:column;gap:7px;padding:12px;
+        background:rgba(10,9,9,.83);border:1px solid rgba(198,156,74,.6);
+        color:#f5d46c;border-radius:6px;box-shadow:0 3px 18px #000;
+        font-size:clamp(10px,.9vw,14px);
+      }
+      #cloud-save-panel button {padding:7px 8px;border-radius:4px;border:1px solid #9c844b;
+        background:#21180d;color:#f7e79d;font-weight:bold;cursor:pointer;}
+      #cloud-save-panel button:hover:not(:disabled) { background:#433016; }
+      #cloud-save-panel button:disabled {opacity:.5;cursor:wait;}
+      #cloud-save-status {margin:0;font-size:clamp(9px,.75vw,12px);line-height:1.4;
+        color:#e7d7b5;overflow-wrap:anywhere;}
+      @media(max-width:700px) {
+        #cloud-save-panel {top:auto;bottom:17%;right:3%;width:49%;padding:6px;gap:4px;}
+        #cloud-save-panel button {padding:5px;}
+      }
     </style>   <!-- 🖼️ 瀏覽器分頁圖示(favicon)：把你的圖放到 assets/favicon.png 即生效；可改 href 路徑或副檔名(.ico/.svg) -->
 
     <link rel="stylesheet" href="css/style.css?v=v3.8.6-npc-private-chat">
@@ -42,10 +59,18 @@
             <button type="button" id="btn-google-login" disabled>使用 Google 帳號登入</button>
             <button type="button" id="btn-google-logout" hidden>登出 Google 帳號</button>
             <p id="google-auth-status" role="status" aria-live="polite">尚未設定 Google 登入；訪客模式與本機存檔正常可用。</p>
+
             <button onclick="toggleVfxPref()" id="btn-vfx-toggle" class="btn text-base w-72 py-2.5 bg-slate-700 hover:bg-slate-600 border-slate-500">✨ 戰鬥特效：開啟</button>
             <button onclick="toggleVfxNumPref()" id="btn-vfxnum-toggle" class="btn text-base w-72 py-2.5 bg-slate-700 hover:bg-slate-600 border-slate-500">🔢 傷害數字：開啟</button>
             <p class="text-xs text-slate-500 -mt-2 w-72 text-center">效果較弱/卡頓的裝置可關閉戰鬥特效；「傷害數字」可獨立關閉、其餘特效保留（開始前設定，遊戲中不再提供）</p>
         </div>
+
+        <section id="cloud-save-panel" aria-label="雲端存檔管理">
+            <strong>雲端進度</strong>
+            <button type="button" id="cloud-save-upload" hidden>上傳本機存檔</button>
+            <button type="button" id="cloud-save-restore" hidden>下載雲端存檔</button>
+            <p id="cloud-save-status" role="status" aria-live="polite">Google 登入後可啟用完整進度的雲端備份。</p>
+        </section>
 
         <div id="login-meta-layer">
             <!-- 🏷️ 版本號（由 js/14 window.onload 依 GAME_VERSION 填入；此處 v2.4.0 僅為 JS 失效時的後備文字） -->
@@ -593,5 +618,6 @@
 <script src="js/32-threat.js?v=v3.8.23-sherine-set-rework"></script>
     <script src="js/google-auth-config.js?v=1"></script>
     <script src="js/33-google-auth.js?v=1"></script>
+    <script src="js/34-cloud-save.js?v=1"></script>
 </body>
 </html>

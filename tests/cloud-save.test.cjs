@@ -1,0 +1,159 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const source = fs.readFileSync(path.join(__dirname, '..', 'js', '34-cloud-save.js'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const role = JSON.stringify({v:2, p:{cls:'knight', lv:60}, ms:{current:'town_silver_knight'}});
+const save = 'SIG1:test:' + role;
+function createHarness(opts = {}) {
+    const data = new Map(opts.local || []);
+    const db = {row: opts.cloud || null, updates:0, inserts:0};
+    const uid = opts.uid === undefined ? 'user-1' : opts.uid;
+    let account = uid ? {id:uid,email:'example@example.test'} : null;
+    let shouldConfirm = opts.confirm !== false;
+    let backupDownloads = 0, reloads = 0, saveAttempts = 0;
+    const timers=[];
+    const elems = {};
+    for(const id of ['cloud-save-upload','cloud-save-restore','cloud-save-status','game-screen']) {
+        elems[id]={hidden:id!=='cloud-save-status',disabled:false,handlers:{},
+            classList:{contains(){return !opts.playing;}},textContent:'',style:{},
+            addEventListener(n,cb){this.handlers[n]=cb;},
+            click(){return this.handlers.click && this.handlers.click();}};
+    }
+    const localStorage={getItem(k){return data.has(k)?data.get(k):null;},
+        setItem(k,v){data.set(k,String(v));},removeItem(k){data.delete(k);}};
+    const methods={
+        from(table) {
+            assert.equal(table, 'game_saves');
+            return {
+                select(cols){this.cols=cols;return this;},
+                eq(k,v){this[k]=v;return this;},
+                insert(payload){this.mode='insert';this.payload=payload;return this;},
+                update(payload){this.mode='update';this.payload=payload;return this;},
+                async maybeSingle(){
+                    if(this.mode==='update'){
+                        if (!db.row || this.revision!==db.row.revision) return {data:null,error:null};
+                        db.row={...db.row,...this.payload};db.updates++;
+                        return {data:{revision:db.row.revision},error:null};
+                    }
+                    return {data:db.row?{...db.row}:null,error:null};
+                },
+                async single(){
+                    if(db.row)return{data:null,error:{message:'duplicate',code:'23505'}};
+                    db.row={...this.payload};db.inserts++;
+                    return{data:{revision:db.row.revision},error:null};
+                }
+            };
+        },
+        auth:{async getUser(){return {data:{user:account},error:null};}}
+    };
+    const listeners = new Map();
+    const window = {
+        fableStore:null,
+        localStorage,
+        Event:class{constructor(type){this.type=type;}},
+        IDLE_GOOGLE_AUTH:{getClient(){return account?methods:null;},getUser(){return account;}},
+        confirm(){return shouldConfirm;},
+        location:{reload(){reloads++;}},
+        addEventListener(name,fn){listeners.set(name,fn);},
+        dispatchEvent(e){if(listeners.has(e.type))listeners.get(e.type)(e);}
+    };
+    const document={
+        readyState:'complete',
+        getElementById(k){return elems[k]||null;},
+        createElement(){return{click(){backupDownloads++;},remove(){},set href(v){},set download(v){}};},
+        body:{appendChild(){}}
+    };
+    const URLStub={createObjectURL(){return 'blob:test';},revokeObjectURL(){}};
+    const sandbox={window,document,URL:URLStub,Blob,Date,JSON,console,setTimeout(fn){Promise.resolve().then(fn);return 1;},
+        setInterval(fn){timers.push(fn);return 1;},
+        _lzGet(key){return localStorage.getItem(key);},
+        _lzSet(key,value){localStorage.setItem(key,value);return true;},
+        _lzSetStoredRaw(key,value){localStorage.setItem(key,value);return true;},
+        _lzRemoveStored(key){localStorage.removeItem(key);},
+        _saveUnwrap(raw){return{ok:true,payload:raw.startsWith('SIG1:')?raw.split(':').slice(2).join(':'):raw};},
+        saveGame(){saveAttempts++;return opts.failedSave?false:true;},
+        _roleOtherActiveSessions(){return opts.otherTabs?[{slot:2}]:[];},
+        player:{cls:opts.playing?'knight':null}
+    };
+    vm.runInNewContext(source,sandbox);
+    return {data,db,elems,timers,window,get backupDownloads(){return backupDownloads;},
+        get reloads(){return reloads;},get saveAttempts(){return saveAttempts;},
+        setAccount(id){account=id?{id,email:'example@example.test'}:null;window.dispatchEvent(new window.Event('idle-google-auth-change'));},
+        async settle(){for(let i=0;i<7;i++)await tick();},
+        async click(id){await elems[id].click();await this.settle();},
+        async interval(){for(const fn of timers)await fn();await this.settle();}
+    };
+}
+test('main menu has cloud controls and script',()=>{
+    for(const s of ['cloud-save-upload','cloud-save-restore','cloud-save-status','js/34-cloud-save.js'])
+        assert.ok(html.includes(s),s);
+});
+test('snapshot only includes the known game storage keys, never OAuth tokens',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save],['sb-project-auth-token','do-not-upload']]});
+    await h.settle();
+    assert.equal(h.db.row,null);
+    await h.click('cloud-save-upload');
+    assert.equal(h.db.inserts,1);
+    assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,save);
+    assert.equal(h.db.row.save_data.entries['sb-project-auth-token'],undefined);
+    assert.equal(JSON.stringify(h.db.row.save_data).includes('do-not-upload'),false);
+    assert.equal(h.data.has('fb5_cloud_link_owner_v1'),true);
+});
+test('guest mode never performs cloud requests or uploads',async()=>{
+    const h=createHarness({uid:null,local:[['lineage_idle_save_1',save]]});
+    await h.settle(); await h.interval();
+    assert.equal(h.db.inserts,0);
+    assert.equal(h.elems['cloud-save-upload'].hidden,true);
+});
+test('unlinked cloud save is not automatically overwritten',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:{revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:save}}}});
+    await h.settle();await h.interval();
+    assert.equal(h.db.updates,0);
+    assert.equal(h.db.row.revision,3);
+    assert.match(h.elems['cloud-save-status'].textContent,/請選擇上傳本機或下載雲端/);
+});
+test('successful restore backs up local and reloads with cloud save',async()=>{
+    const remote='SIG1:test:'+JSON.stringify({v:2,p:{cls:'mage',lv:20},ms:{current:'town_giran'}});
+    const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:{revision:4,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:remote}}}});
+    await h.settle();await h.click('cloud-save-restore');
+    assert.equal(h.data.get('lineage_idle_save_1'),undefined);
+    assert.equal(h.data.get('lineage_idle_save_2'),remote);
+    assert.equal(JSON.parse(h.data.get('fb5_cloud_link_owner_v1')).revision,4);
+    assert.equal(h.backupDownloads,1);
+    assert.equal(h.reloads,1);
+});
+test('stale other-device revision cannot be overwritten by auto sync',async()=>{
+    const local=[['lineage_idle_save_1',save],['fb5_cloud_link_owner_v1',JSON.stringify({uid:'user-1',revision:1})]];
+    const h=createHarness({local,cloud:{revision:1,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:save}}}});
+    await h.settle();
+    h.db.row.revision=2;
+    await h.interval();
+    assert.equal(h.db.updates,0);
+    assert.equal(h.db.row.revision,2);
+    assert.match(h.elems['cloud-save-status'].textContent,/自動同步已暫停/);
+});
+test('invalid or injected cloud keys are rejected',async()=>{
+    const h=createHarness({uid:null});
+    const validate=h.window.IDLE_CLOUD_SAVE.validate;
+    assert.throws(()=>validate({format:'idle-rpg-cloud-bundle',schema:1,entries:{'sb-auth-token':'secret'}}),/無法識別/);
+    assert.throws(()=>validate({format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:'broken'}}),/有效角色|JSON/);
+});
+test('an account switch pauses sync and requires explicit action',async()=>{
+    const local=[['lineage_idle_save_1',save],['fb5_cloud_link_owner_v1',JSON.stringify({uid:'old-user',revision:7})]];
+    const h=createHarness({local,uid:'user-1'});await h.settle();await h.interval();
+    assert.equal(h.db.inserts,0);
+    assert.match(h.elems['cloud-save-status'].textContent,/上傳本機/);
+    await h.click('cloud-save-upload');assert.equal(h.db.inserts,1);
+});
+test('active role must save successfully before upload',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save]],playing:true,failedSave:true});
+    await h.settle();await h.click('cloud-save-upload');
+    assert.equal(h.db.inserts,0);
+    assert.ok(h.saveAttempts>0);
+});

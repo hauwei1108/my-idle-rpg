@@ -16,6 +16,8 @@
     let user = null;
     let phase = 'unconfigured';
     let lastError = '';
+    // Public app integration surface: no tokens or keys are exposed here.
+    window.IDLE_GOOGLE_AUTH = Object.freeze({ getClient: function () { return client; }, getUser: function () { return user; } });
 
     function element(name) { return document.getElementById(ids[name]); }
 
@@ -56,6 +58,8 @@
         else if (phase === 'loading') status.textContent = '正在連線至帳號驗證服務…';
         else if (phase === 'signing-in') status.textContent = '登入中，請稍候…';
         else status.textContent = '尚未登入。可選擇 Google 登入或以訪客身份遊玩；存檔均保留在本機。';
+        if (typeof window.dispatchEvent === 'function' && typeof window.Event === 'function')
+            window.dispatchEvent(new window.Event('idle-google-auth-change'));
     }
 
     function loadSdk() {
