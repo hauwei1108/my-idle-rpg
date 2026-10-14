@@ -1498,6 +1498,10 @@ function _mercMonotonicExpGuard() {
     } catch (e) {}
 }
 function saveGame() {
+    // 後登入優先：被另一個 Google 連線取代的舊分頁禁止再寫本機角色。
+    if (typeof window !== 'undefined' && window.IDLE_CLOUD_SAVE &&
+        typeof window.IDLE_CLOUD_SAVE.canSaveLocally === 'function' &&
+        !window.IDLE_CLOUD_SAVE.canSaveLocally()) return false;
     // 死亡狀態不寫檔：避免把 player.dead=true 存進去，導致下次讀檔卡在死亡狀態而不出怪。
     // 死亡期間沒有可保存的進度，保留上一份「存活」存檔即可。
     if (player && player.dead) return false;
