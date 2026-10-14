@@ -23,7 +23,7 @@ function createHarness(opts = {}) {
     let backupDownloads = 0, reloads = 0, saveAttempts = 0;
     const timers=[];
     const elems = {};
-    for(const id of ['cloud-save-upload','cloud-save-restore','cloud-save-status','game-screen']) {
+    for(const id of ['cloud-save-upload','cloud-save-restore','cloud-save-status','game-screen','btn-start-menu']) {
         elems[id]={hidden:id!=='cloud-save-status',disabled:false,handlers:{},
             classList:{contains(){return !opts.playing;}},textContent:'',style:{},
             addEventListener(n,cb){this.handlers[n]=cb;},
@@ -39,7 +39,7 @@ function createHarness(opts = {}) {
             if(name==='claim_game_session'){db.sessionId=args.p_session;db.claims++;return {data:true,error:null};}
             if(name==='game_session_alive')return {data:db.sessionId===args.p_session,error:null};
             if(db.sessionId!==args.p_session)return {data:null,error:{message:'GAME_SESSION_REPLACED'}};
-            if(name==='read_game_save')return {data:db.row?{...db.row}:null,error:null};
+            if(name==='read_game_save')return opts.failRead ? {data:null,error:{message:'network unavailable'}} : {data:db.row?{...db.row}:null,error:null};
             if(name==='write_game_save'){
                 const old=args.p_expected_revision;
                 if((db.row?db.row.revision:0)!==old)return {data:null,error:{message:'SAVE_REVISION_CONFLICT'}};
@@ -380,4 +380,60 @@ test('a displaced player receives a final local save even though cloud writes ar
     assert.equal(old.window.IDLE_CLOUD_SAVE.canSaveLocally(),false);
     assert.ok(old.saveAttempts > previousSaves,'old session must flush current player to local disk before kick');
     assert.equal(db.updates,0,'stale session cannot upload after a new claim');
+});
+
+test('guest switching to Google asks for JSON export and cancel retains local save',async()=>{
+    const h=createHarness({uid:null,confirm:false,local:[['lineage_idle_save_1',save]]});
+    await h.settle();
+    assert.equal(h.window.IDLE_CLOUD_SAVE.prepareGoogleSignIn(),false);
+    assert.equal(h.data.get('lineage_idle_save_1'),save);
+    assert.equal(h.db.inserts,0);
+});
+test('a guest who acknowledged the export warning may start OAuth without automatic import',async()=>{
+    const h=createHarness({uid:null,confirm:true,local:[['lineage_idle_save_1',save]]});
+    await h.settle();
+    assert.equal(h.window.IDLE_CLOUD_SAVE.prepareGoogleSignIn(),true);
+    assert.equal(h.data.get('lineage_idle_save_1'),save);
+    assert.equal(h.db.inserts,0);
+});
+test('cloud save takes precedence over an older local cache from the SAME account',async()=>{
+    const updated='SIG1:test:'+JSON.stringify({v:2,p:{cls:'knight',lv:71},ms:{current:'town_giran'}});
+    const h=createHarness({local:[
+        ['lineage_idle_save_1',save],
+        ['fb5_cloud_link_owner_v1',JSON.stringify({uid:'user-1',revision:5})]
+    ],cloud:{revision:6,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:updated}}}});
+    await h.settle();
+    assert.equal(h.data.get('lineage_idle_save_1'),updated);
+    assert.equal(h.reloads,1);
+    assert.equal(h.db.updates,0);
+    assert.equal(JSON.parse(h.data.get('fb5_cloud_link_owner_v1')).revision,6);
+});
+test('no remote Google save clears guest slots rather than binding them silently',async()=>{
+    const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:null});
+    await h.settle();
+    assert.equal(h.data.has('lineage_idle_save_1'),false);
+    assert.equal(h.db.inserts,0);
+    assert.equal(h.reloads,1);
+    assert.equal(JSON.parse(h.data.get('fb5_cloud_link_owner_v1')).revision,0);
+});
+test('Google logout refuses to discard unsaved role and clears signed-in cache after syncing',async()=>{
+    const h=createHarness({local:[]});
+    await h.settle();
+    h.data.set('lineage_idle_save_1',save);
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();
+    await h.settle();
+    assert.equal(await h.window.IDLE_CLOUD_SAVE.beforeGoogleSignOut(),true);
+    h.window.IDLE_CLOUD_SAVE.afterGoogleSignOut();
+    assert.equal(h.data.has('lineage_idle_save_1'),false);
+    assert.equal(h.data.has('fb5_cloud_link_owner_v1'),false);
+    assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,save);
+    assert.equal(h.reloads,1);
+});
+test('Google cloud read failure disables game start instead of falling back to guest cache',async()=>{
+    const h=createHarness({failRead:true,local:[['lineage_idle_save_1',save]]});
+    await h.settle();
+    assert.equal(h.db.inserts,0);
+    assert.equal(h.data.get('lineage_idle_save_1'),save);
+    assert.equal(h.elems['btn-start-menu'].disabled,true);
+    assert.match(h.elems['cloud-save-status'].textContent,/無法載入 Google 雲端進度/);
 });
