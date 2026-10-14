@@ -31,6 +31,9 @@ function createHarness(opts = {}) {
     }
     const localStorage={getItem(k){return data.has(k)?data.get(k):null;},
         setItem(k,v){data.set(k,String(v));},removeItem(k){data.delete(k);}};
+    const tab=new Map();
+    const sessionStorage={getItem(k){return tab.has(k)?tab.get(k):null;},
+        setItem(k,v){tab.set(k,String(v));},removeItem(k){tab.delete(k);}};
     const methods={
         async rpc(name,args) {
             if(name==='claim_game_session'){db.sessionId=args.p_session;db.claims++;return {data:true,error:null};}
@@ -76,7 +79,8 @@ function createHarness(opts = {}) {
     const window = {
         fableStore:null,
         crypto:{randomUUID:nextToken},
-        localStorage,
+        localStorage,sessionStorage,
+        alert(){},
         Event:class{constructor(type){this.type=type;}},
         IDLE_GOOGLE_AUTH:{getClient(){return account?methods:null;},getUser(){return account;}},
         confirm(){return shouldConfirm;},
@@ -119,9 +123,11 @@ test('main menu has cloud controls and script',()=>{
         assert.ok(html.includes(s),s);
 });
 test('snapshot only includes the known game storage keys, never OAuth tokens',async()=>{
-    const h=createHarness({local:[['lineage_idle_save_1',save],['sb-project-auth-token','do-not-upload']]});
+    const h=createHarness({local:[['sb-project-auth-token','do-not-upload']]});
     await h.settle();
     assert.equal(h.db.row,null);
+    // A Google account with no remote save starts empty; only subsequent creation/import binds.
+    h.data.set('lineage_idle_save_1',save);
     h.window.IDLE_CLOUD_SAVE.onProgressSaved();
     await h.settle();
     assert.equal(h.db.inserts,1);
@@ -141,16 +147,16 @@ test('unlinked cloud save is not automatically overwritten',async()=>{
     await h.settle();await h.interval();
     assert.equal(h.db.updates,0);
     assert.equal(h.db.row.revision,3);
-    assert.match(h.elems['cloud-save-status'].textContent,/下載雲端存檔/);
+    assert.match(h.elems['cloud-save-status'].textContent,/已載入 Google 雲端進度/);
 });
-test('successful restore backs up local and reloads with cloud save',async()=>{
+test('Google sign-in automatically restores cloud JSON over previously acknowledged guest save',async()=>{
     const remote='SIG1:test:'+JSON.stringify({v:2,p:{cls:'mage',lv:20},ms:{current:'town_giran'}});
     const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:{revision:4,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:remote}}}});
-    await h.settle();await h.click('cloud-save-restore');
+    await h.settle();
     assert.equal(h.data.get('lineage_idle_save_1'),undefined);
     assert.equal(h.data.get('lineage_idle_save_2'),remote);
     assert.equal(JSON.parse(h.data.get('fb5_cloud_link_owner_v1')).revision,4);
-    assert.equal(h.backupDownloads,1);
+    assert.equal(h.backupDownloads,0);
     assert.equal(h.reloads,1);
 });
 test('stale other-device revision cannot be overwritten by auto sync',async()=>{
@@ -169,17 +175,18 @@ test('invalid or injected cloud keys are rejected',async()=>{
     assert.throws(()=>validate({format:'idle-rpg-cloud-bundle',schema:1,entries:{'sb-auth-token':'secret'}}),/無法識別/);
     assert.throws(()=>validate({format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:'broken'}}),/有效角色|JSON/);
 });
-test('an account switch does not transfer old account saves',async()=>{
+test('a new Google account starts empty instead of inheriting the previous account local role',async()=>{
     const local=[['lineage_idle_save_1',save],['fb5_cloud_link_owner_v1',JSON.stringify({uid:'old-user',revision:7})]];
     const h=createHarness({local,uid:'user-1'});await h.settle();
-    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.interval();
     assert.equal(h.db.inserts,0);
-    assert.match(h.elems['cloud-save-status'].textContent,/其他 Google 帳號/);
+    assert.equal(h.data.has('lineage_idle_save_1'),false);
+    assert.equal(h.reloads,1);
     assert.equal(h.elems['cloud-save-upload'].hidden,true);
 });
 test('active role must save successfully before auto upload',async()=>{
-    const h=createHarness({local:[['lineage_idle_save_1',save]],playing:true,failedSave:true});
+    const h=createHarness({local:[],playing:true,failedSave:true});
     await h.settle();
+    h.data.set('lineage_idle_save_1',save);
     h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
     assert.equal(h.db.inserts,0);
     assert.ok(h.saveAttempts>0);
@@ -189,7 +196,7 @@ test('new Google account auto-binds after character creation without a manual bu
     await h.settle();
     assert.equal(h.db.inserts,0);
     assert.equal(h.elems['cloud-save-upload'].hidden,true);
-    assert.match(h.elems['cloud-save-status'].textContent,/首次存檔會自動綁定/);
+    assert.match(h.elems['cloud-save-status'].textContent,/第一次成功存檔就會綁定/);
     h.data.set('lineage_idle_save_1',save);
     h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
     assert.equal(h.db.inserts,1);
@@ -233,35 +240,36 @@ test('incognito Google login auto-restores even if NPC system initialized Pandor
     assert.equal(h.backupDownloads,0);
     assert.equal(h.db.updates,0);
 });
-test('meaningful Pandora diamonds without a role are not overwritten',async()=>{
+test('Google cloud data takes precedence over guest Pandora diamonds after warning',async()=>{
     const shared=JSON.stringify({v:3,diamonds:500,boards:[],wanderers:[]});
     const cloud={revision:2,save_data:{
         format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:save}
     }};
     const h=createHarness({local:[['fb5_pandora_relic_market_v1',shared]],cloud});
     await h.settle();
-    assert.equal(h.reloads,0);
-    assert.equal(h.data.has('lineage_idle_save_1'),false);
-    assert.equal(h.data.get('fb5_pandora_relic_market_v1'),shared);
-    assert.equal(h.elems['cloud-save-restore'].hidden,false);
+    assert.equal(h.reloads,1);
+    assert.equal(h.data.get('lineage_idle_save_1'),save);
+    assert.equal(h.data.has('fb5_pandora_relic_market_v1'),false);
+    assert.equal(h.elems['cloud-save-restore'].hidden,true);
 });
-test('Pandora cooldown or contract prevents silent restore',async()=>{
+test('Google sign-in restores cloud even if guest cache contains a Pandora contract',async()=>{
     const shared=JSON.stringify({diamonds:0,boards:[{contract:{itemId:'sword'},cooldownUntil:0}]});
     const h=createHarness({local:[['fb5_pandora_relic_market_v1',shared]],cloud:{
         revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:save}}
     }});
     await h.settle();
-    assert.equal(h.reloads,0);
+    assert.equal(h.reloads,1);
+    assert.equal(h.data.get('lineage_idle_save_2'),save);
 });
-test('corrupted shared NPC bucket is preserved, not automatically wiped',async()=>{
+test('corrupted shared NPC bucket is replaced by the authoritative cloud copy',async()=>{
     const h=createHarness({local:[['fb5_pandora_relic_market_v1','broken json']],cloud:{
         revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_3:save}}
     }});
     await h.settle();
-    assert.equal(h.reloads,0);
-    assert.equal(h.data.get('fb5_pandora_relic_market_v1'),'broken json');
+    assert.equal(h.reloads,1);
+    assert.equal(h.data.has('fb5_pandora_relic_market_v1'),false);
 });
-test('a different Google account link prevents silent restore even with only NPC cache',async()=>{
+test('Google switches from a different account after explicit confirmation',async()=>{
     const npc=JSON.stringify({diamonds:0,boards:[]});
     const local=[
         ['fb5_pandora_relic_market_v1',npc],
@@ -271,18 +279,19 @@ test('a different Google account link prevents silent restore even with only NPC
         revision:3,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_5:save}}
     }});
     await h.settle();
-    assert.equal(h.reloads,0);
-    assert.equal(h.data.has('lineage_idle_save_5'),false);
+    assert.equal(h.reloads,1);
+    assert.equal(h.data.get('lineage_idle_save_5'),save);
 });
 
-test('local data is never replaced without consent',async()=>{
-    const h=createHarness({local:[['lineage_idle_save_1',save]],cloud:{
+test('guest data is not replaced if the export warning is cancelled',async()=>{
+    const h=createHarness({confirm:false,local:[['lineage_idle_save_1',save]],cloud:{
         revision:5,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_2:save}}
     }});await h.settle();
     assert.equal(h.reloads,0);
     assert.equal(h.data.get('lineage_idle_save_1'),save);
     assert.equal(h.data.has('lineage_idle_save_2'),false);
-    assert.equal(h.elems['cloud-save-restore'].hidden,false);
+    assert.equal(h.elems['cloud-save-restore'].hidden,true);
+    assert.equal(h.elems['btn-start-menu']?.disabled??true,true);
 });
 test('guests never upload even after saving progress',async()=>{
     const h=createHarness({local:[],uid:null});await h.settle();
@@ -302,8 +311,9 @@ test('existing game save and import paths both notify the cloud layer after succ
 
 test('new login kicks existing browser and prevents older saves',async()=>{
     const db={row:null,inserts:0,updates:0,sessionId:null,claims:0};
-    const first=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    const first=createHarness({sharedDb:db,local:[]});
     await first.settle();
+    first.data.set('lineage_idle_save_1',save);
     first.window.IDLE_CLOUD_SAVE.onProgressSaved();await first.settle();
     assert.equal(db.inserts,1);
     const firstToken=db.sessionId;
@@ -318,7 +328,7 @@ test('new login kicks existing browser and prevents older saves',async()=>{
 });
 test('old session cannot write even before the next polling check',async()=>{
     const db={row:null,inserts:0,updates:0,sessionId:null,claims:0};
-    const old=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
+    const old=createHarness({sharedDb:db,local:[]});
     await old.settle();
     const newer=createHarness({sharedDb:db,local:[['lineage_idle_save_1',save]]});
     await newer.settle();
@@ -331,8 +341,9 @@ test('active gameplay syncs every ten seconds instead of the old sixty-second in
     assert.match(source,/setInterval\(function \(\) \{ if \(active\) uploadCloud\(false\); \}, INTERVAL_MS\)/);
 });
 test('backgrounding a tab initiates cloud flush for current role',async()=>{
-    const h=createHarness({local:[['lineage_idle_save_1',save]]});
+    const h=createHarness({local:[]});
     await h.settle();
+    h.data.set('lineage_idle_save_1',save);
     h.window.IDLE_CLOUD_SAVE.onProgressSaved();
     await h.settle();
     assert.equal(h.db.row.revision,1);
@@ -343,8 +354,9 @@ test('backgrounding a tab initiates cloud flush for current role',async()=>{
     assert.equal(h.db.row.save_data.entries.lineage_idle_save_1,advanced);
 });
 test('new gameplay that arrives during cloud upload remains queued for follow-up sync',async()=>{
-    const h=createHarness({local:[['lineage_idle_save_1',save]]});
-    await h.settle();h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
+    const h=createHarness({local:[]});
+    await h.settle();h.data.set('lineage_idle_save_1',save);
+    h.window.IDLE_CLOUD_SAVE.onProgressSaved();await h.settle();
     const advanced='SIG1:test:'+JSON.stringify({v:2,p:{cls:'knight',lv:61},ms:{current:'town_giran'}});
     h.data.set('lineage_idle_save_1',advanced);
     h.window.IDLE_CLOUD_SAVE.onProgressSaved();
@@ -353,8 +365,9 @@ test('new gameplay that arrives during cloud upload remains queued for follow-up
 });
 test('a displaced player receives a final local save even though cloud writes are blocked',async()=>{
     const db={row:null,inserts:0,updates:0,sessionId:null,claims:0};
-    const old=createHarness({sharedDb:db,playing:true,local:[['lineage_idle_save_1',save]]});
+    const old=createHarness({sharedDb:db,playing:true,local:[]});
     await old.settle();
+    old.data.set('lineage_idle_save_1',save);
     // First cloud upload calls the normal local save.
     old.window.IDLE_CLOUD_SAVE.onProgressSaved();await old.settle();
     const previousSaves=old.saveAttempts;
