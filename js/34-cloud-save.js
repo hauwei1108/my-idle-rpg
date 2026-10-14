@@ -292,6 +292,8 @@
     }
     async function uploadCloud(manual) {
         if (!client || !userId || busy) return;
+        // The manual override only exists when a remote save already exists.
+        if (manual && !hasCloud) return;
         const uid = userId, epoch = accountEpoch;
         // No cloud save: successful in-game save / JSON import can insert revision 1.
         if (!manual && !active && !firstUploadArmed) return;
