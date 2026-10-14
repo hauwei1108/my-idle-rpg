@@ -165,6 +165,7 @@ test('stale other-device revision cannot be overwritten by auto sync',async()=>{
     const h=createHarness({local,cloud:{revision:1,save_data:{format:'idle-rpg-cloud-bundle',schema:1,entries:{lineage_idle_save_1:save}}}});
     await h.settle();
     h.db.row.revision=2;
+    h.data.set('lineage_idle_save_1', 'SIG1:test:'+JSON.stringify({v:2,p:{cls:'knight',lv:61},ms:{current:'town_giran'}}));
     await h.interval();
     assert.equal(h.db.updates,0);
     assert.equal(h.db.row.revision,2);
