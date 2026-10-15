@@ -341,8 +341,8 @@ const DOLL_BAG_POOL = [['doll_野狼寶寶',1175],['doll_史巴托',1175],['doll
 // 各階娃娃 id 清單（合成隨機抽下一階用）；於載入時掃 DB.items 一次建立
 const DOLL_BY_TIER = { 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
 (function(){ for (let id in DB.items) { let d = DB.items[id]; if (d && d.doll && d.dollTier && DOLL_BY_TIER[d.dollTier]) DOLL_BY_TIER[d.dollTier].push(id); } })();
-// 合成成功率表：DOLL_SYNTH_RATES[來源階][放入數量] = %（1→2,2→3,...,5→6）
-const DOLL_SYNTH_RATES = { 1:{2:8,3:23,4:45}, 2:{2:7,3:20,4:40}, 3:{2:4,3:12,4:23}, 4:{2:2,3:6,4:12}, 5:{2:1,3:3,4:6} };
+// 合成成功率表：原始成功率 ×10，最高 100%；單次、全部合成及介面共用此表。
+const DOLL_SYNTH_RATES = { 1:{2:80,3:100,4:100}, 2:{2:70,3:100,4:100}, 3:{2:40,3:100,4:100}, 4:{2:20,3:60,4:100}, 5:{2:10,3:30,4:60} };
 function _dollRng(tag, seq) { return _seededFloat(((player && player.enSeed) || 'x') + '|doll' + tag + '|' + seq); }   // 決定論 [0,1)
 function _dollBagOutcome(seq) { let r = _dollRng('bag', seq) * 10000, acc = 0; for (let p of DOLL_BAG_POOL) { acc += p[1]; if (r < acc) return p[0]; } return DOLL_BAG_POOL[0][0]; }
 // 🎁 高級魔法娃娃的盒子：80% 二階 / 18% 三階 / 2% 四階（總權重 10000）；選定階後該階娃娃「平均」抽一隻。committed RNG（dollSeq·save/load 不變）。

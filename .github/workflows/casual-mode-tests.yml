@@ -21,6 +21,7 @@ jobs:
       - name: Unit and integration markers
         run: |
           node tests/casual-mode.test.cjs
+          node tests/doll-synthesis-rates.test.cjs
           node tests/antharas-daily-limit.test.cjs
           node --test tests/google-auth.test.cjs
           node --test tests/cloud-save.test.cjs
