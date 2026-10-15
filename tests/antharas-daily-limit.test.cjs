@@ -30,7 +30,7 @@ function fixture() {
 
 {
   const f = fixture();
-  assert.equal(f.ctx.ANTHARAS_DAILY_LIMIT, 10);
+  assert.equal(vm.runInContext('ANTHARAS_DAILY_LIMIT', f.ctx), 10);
   assert.equal(f.ctx.antharasClearedToday(), false);
   for(let i=1;i<=10;i++){
     assert.equal(f.ctx.antharasClaimDailyClear().ok,true,'success '+i);
