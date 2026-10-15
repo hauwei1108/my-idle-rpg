@@ -825,12 +825,14 @@ function startOblivion() {
 }
 // ======================= 🐉 侵蝕的安塔瑞斯巢穴（v3.7.57 副本）=======================
 // 由威頓村 NPC 多魯嘉貝爾進入；4 區推進（入口→通道→深處→棲息地），擊敗各區頭目自動深入，
-// 擊敗「被侵蝕的瘋狂安塔瑞斯」通關→自動回威頓村。每個角色每日可通關 1 次；擔任主戰或實際出戰傭兵都會消耗該角色次數（UTC+8 凌晨 12 點重置·失敗/離開不耗次數）。
+// 擊敗「被侵蝕的瘋狂安塔瑞斯」通關→自動回威頓村。每個角色每日可通關 10 次；擔任主戰或實際出戰傭兵都會消耗該角色次數（UTC+8 凌晨 12 點重置·失敗/離開不耗次數）。
 // 狀態存於 state.antharas（1~4·不存檔＝重載回村視同失敗）；區內禁傳送術/瞬移卷軸（js/07/08）；進場複用 enterOblivionMap（泛用戰鬥進場）。
 const ANTHARAS_AREAS = ['antharas_nest_1', 'antharas_nest_2', 'antharas_nest_3', 'antharas_lair'];
 const ANTHARAS_AREA_NAMES = { antharas_nest_1: '侵蝕的安塔瑞斯巢穴入口', antharas_nest_2: '侵蝕的安塔瑞斯巢穴通道', antharas_nest_3: '侵蝕的安塔瑞斯巢穴深處', antharas_lair: '侵蝕的安塔瑞斯棲息地' };
 const ANTHARAS_AREA_BOSS = { antharas_nest_1: 'ant_kama_flame_king', antharas_nest_2: 'ant_kama_nan_king', antharas_nest_3: 'ant_kama_king', antharas_lair: 'ant_antharas_eroded' };
 const ANTHARAS_ROLE_DAY_KEY = 'fb5_antharas_role_clear_day_v2_';
+const ANTHARAS_ROLE_COUNT_KEY = 'fb5_antharas_role_clear_count_v3_';
+const ANTHARAS_DAILY_LIMIT = 10;
 function antharasDayKey() { return Math.floor((Date.now() + 8 * 3600000) / 86400000); }   // 🕛 UTC+8 日鍵（凌晨 12 點翻日）
 function antharasRoleRef(role, slotN) {
     if (!role || !role.cls) return null;
@@ -845,21 +847,31 @@ function antharasRoleRef(role, slotN) {
         name: role.name || role._allyName || ('存檔 ' + (slot || '?')),
         identity: identity,
         classicMode: !!role.classicMode,
-        savedDay: Math.max(0, Math.floor(Number(role.antharasClearDay) || 0))
+        savedDay: Math.max(0, Math.floor(Number(role.antharasClearDay) || 0)),
+        savedCount: Math.max(0, Math.floor(Number(role.antharasClearCount) || 0))
     };
 }
 function antharasRoleClearKey(ref) {
     return ANTHARAS_ROLE_DAY_KEY + (ref.classicMode ? 'classic_' : 'normal_') + encodeURIComponent(ref.identity);
 }
-function antharasRoleClearDay(ref) {
+function antharasRoleCountKey(ref) {
+    return ANTHARAS_ROLE_COUNT_KEY + (ref.classicMode ? 'classic_' : 'normal_') + encodeURIComponent(ref.identity);
+}
+function antharasRoleClearCount(ref, today = antharasDayKey()) {
     if (!ref) return 0;
-    let sharedDay = Math.max(0, Math.floor(Number(_lsGet(antharasRoleClearKey(ref))) || 0));
-    return Math.max(ref.savedDay, sharedDay);
+    let raw = _lsGet(antharasRoleCountKey(ref)), record;
+    try { record = raw ? JSON.parse(raw) : null; } catch (e) { record = null; }
+    let count = (record && Number(record.day) === today) ? Math.max(0, Math.floor(Number(record.count) || 0)) : 0;
+    if (ref.savedDay === today) count = Math.max(count, Math.max(1, ref.savedCount));
+    // 舊版本一天只通關一次；升級當日視為已使用一次，隔天自然歸零。
+    if (Number(_lsGet(antharasRoleClearKey(ref))) === today) count = Math.max(count, 1);
+    return count;
 }
 function antharasForgetRoleClear(role, slotN) {
     let ref = antharasRoleRef(role, slotN);
     if (!ref) return;
     _lsRemove(antharasRoleClearKey(ref));
+    _lsRemove(antharasRoleCountKey(ref));
 }
 function antharasPartyParticipants() {
     let refs = [], seen = new Set();
@@ -873,26 +885,23 @@ function antharasPartyParticipants() {
     return refs;
 }
 function antharasPartyUsedToday() {
-    let today = antharasDayKey();
-    return antharasPartyParticipants().filter(ref => antharasRoleClearDay(ref) === today);
+    return antharasPartyParticipants().filter(ref => antharasRoleClearCount(ref) >= ANTHARAS_DAILY_LIMIT);
 }
 function antharasClearedToday() {
-    let ref = antharasRoleRef(player, currentSlot);
-    let cleared = antharasRoleClearDay(ref) === antharasDayKey();
-    if (cleared && Number(player.antharasClearDay) !== antharasDayKey()) player.antharasClearDay = antharasDayKey();
-    return cleared;
+    return antharasRoleClearCount(antharasRoleRef(player, currentSlot)) >= ANTHARAS_DAILY_LIMIT;
 }
 function antharasClaimDailyClear() {
     let today = antharasDayKey();
     let refs = antharasPartyParticipants();
-    let used = refs.filter(ref => antharasRoleClearDay(ref) === today);
+    let used = refs.filter(ref => antharasRoleClearCount(ref, today) >= ANTHARAS_DAILY_LIMIT);
     if (used.length) return { ok: false, names: used.map(ref => ref.name), storageError: false };
 
     let written = [];
     for (let ref of refs) {
-        let key = antharasRoleClearKey(ref);
+        let key = antharasRoleCountKey(ref);
         let oldValue = _lsGet(key);
-        if (!_lsSet(key, String(today))) {
+        let next = antharasRoleClearCount(ref, today) + 1;
+        if (!_lsSet(key, JSON.stringify({ day: today, count: next }))) {
             written.reverse().forEach(rec => {
                 try {
                     if (rec.oldValue == null) _lsRemove(rec.key);
@@ -901,10 +910,14 @@ function antharasClaimDailyClear() {
             });
             return { ok: false, names: [], storageError: true };
         }
-        written.push({ key: key, oldValue: oldValue });
+        written.push({ key, oldValue });
     }
-    refs.forEach(ref => { ref.role.antharasClearDay = today; });
-    player.antharasClearDay = today;   // 保留角色欄位，讓匯出與舊版仍能辨識主戰角色的通關日。
+    refs.forEach(ref => {
+        ref.role.antharasClearDay = today;
+        ref.role.antharasClearCount = antharasRoleClearCount(ref, today);
+    });
+    player.antharasClearDay = today;
+    player.antharasClearCount = antharasRoleClearCount(antharasRoleRef(player, currentSlot), today);
     return { ok: true, names: refs.map(ref => ref.name), storageError: false };
 }
 function antharasEnter() {   // NPC 多魯嘉貝爾「進入副本」：守衛＝已在副本/控場中/每日已通關
@@ -915,7 +928,7 @@ function antharasEnter() {   // NPC 多魯嘉貝爾「進入副本」：守衛�
     }
     let used = antharasPartyUsedToday();
     if (used.length) {
-        logSys(`<span class="text-amber-300">隊伍中的 ${used.map(ref => ref.name).join('、')} 今日已通關；請更換或解散已使用次數的傭兵後再進入（UTC+8 凌晨 12 點重置）。</span>`);
+        logSys(`<span class="text-amber-300">隊伍中的 ${used.map(ref => ref.name).join('、')} 今日已達 10 次通關上限；請更換或解散已用完次數的傭兵後再進入（UTC+8 凌晨 12 點重置）。</span>`);
         return;
     }
     state.antharas = 1; state._antAdvance = false;
@@ -928,7 +941,7 @@ function antharasOnBossKill(bossName) {   // 清算時呼叫：最終階＝通�
     if (!state.antharas) return;
     if (bossName === '被侵蝕的瘋狂安塔瑞斯') {
         state.antharas = 0; state._antAdvance = false;
-        logSys('<span class="text-amber-300 font-bold">🏆 你擊敗了被侵蝕的瘋狂安塔瑞斯，淨化了巢穴！</span>主戰角色與本次出戰傭兵的今日通關次數均已消耗，自動返回威頓村。');
+        logSys('<span class="text-amber-300 font-bold">🏆 你擊敗了被侵蝕的瘋狂安塔瑞斯，淨化了巢穴！</span>主戰角色與本次出戰傭兵的今日通關次數各增加 1 次，自動返回威頓村。');
         setMapSelectors('town_witon'); changeMap(true);
         if (!state.ff) saveGame();
         return;
@@ -1014,9 +1027,9 @@ function renderDorugaBell(div) {   // 🐉 NPC 多魯嘉貝爾：進入副本＋
     }).join('');
     div.innerHTML = `
       <div class="text-sm space-y-3">
-        <div class="text-slate-300">被侵蝕的龍之巢穴就在村外的地底深處。每個角色每天可擔任主戰或傭兵通關一次；成功時主戰與所有出戰傭兵都會消耗今日次數（UTC+8 凌晨 12 點重置），挑戰失敗不消耗。區內無法選擇地圖，也無法使用傳送術與瞬間移動卷軸。</div>
-        ${cleared ? `<div class="text-xs text-amber-300">今日已使用次數：${usedToday.map(ref => ref.name).join('、')}</div>` : ''}
-        <button onclick="antharasEnter()" ${cleared ? 'disabled' : ''} class="btn w-full font-bold py-2 rounded ${cleared ? 'bg-slate-700 border-slate-600 opacity-60 cursor-not-allowed' : 'bg-amber-700 hover:bg-amber-600 border-amber-500'}">${cleared ? '隊伍有角色今日已通關' : '🐉 進入 侵蝕的安塔瑞斯巢穴'}</button>
+        <div class="text-slate-300">被侵蝕的龍之巢穴就在村外的地底深處。每個角色每天可擔任主戰或傭兵成功通關 10 次；成功時主戰與所有出戰傭兵各消耗 1 次（UTC+8 凌晨 12 點重置），挑戰失敗不消耗。區內無法選擇地圖，也無法使用傳送術與瞬間移動卷軸。</div>
+        ${cleared ? `<div class="text-xs text-amber-300">今日已達上限：${usedToday.map(ref => ref.name).join('、')}</div>` : ''}
+        <button onclick="antharasEnter()" ${cleared ? 'disabled' : ''} class="btn w-full font-bold py-2 rounded ${cleared ? 'bg-slate-700 border-slate-600 opacity-60 cursor-not-allowed' : 'bg-amber-700 hover:bg-amber-600 border-amber-500'}">${cleared ? '隊伍有角色已達每日上限' : '🐉 進入 侵蝕的安塔瑞斯巢穴'}</button>
         <div class="border-t border-slate-700 pt-2"><div class="font-bold text-amber-300 mb-2">助戰者設定（最多 4 位·未雇傭角色）</div><div class="text-xs text-slate-400 mb-2">每次對話都會依來源角色的最新存檔刷新助戰能力；若角色遭刪除或在同一存檔位重建，將自動解除。助戰限制只套用目前角色的傭兵名單，不影響同模式其他角色。</div>${rows}</div>
       </div>`;
 }
