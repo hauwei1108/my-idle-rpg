@@ -578,7 +578,7 @@
         ['海賊骷髏首領', 'relic_pirate_ring', 0.0001],
         ['巨人戰士', 'relic_giant_toothpick', 0.0001],
         ['巨人長老', 'relic_giant_throwstone', 0.0001],
-        ['卡司特王', 'relic_redimp_nail', 0.0001],
+        ['卡司特王', 'relic_redimp_nail', 1],
         ['活鎧甲', 'relic_armor_spareblade', 0.0001],
         ['多眼怪', 'relic_beholder_gaze', 0.0001],
         ['龍蠅', 'relic_fly_curse', 0.0001],
