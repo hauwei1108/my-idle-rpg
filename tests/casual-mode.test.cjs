@@ -79,7 +79,7 @@ assert.equal(casualDrop(0.000001), 0.0005, '0.0001% relic drop becomes 0.05%');
 \n// Black Elder's obsidian orb is an intentional exception to the ultra-rare relic table.
 const orbDropEntries = [...enhanceFile.matchAll(/\['黑長者','relic_elder_obsidian_orb',\s*([0-9.]+)\]/g)];
 assert.equal(orbDropEntries.length, 1, 'Black Elder orb has exactly one configured source');
-assert.match(enhanceFile, /\\.push\\(\\[r\\[1\\], r\\[2\\] \\?\\? 0\\.0001\\]\\)/, 'per-item rate overrides must reach MOB_DROPS');
+assert.match(enhanceFile, /\.push\(\[r\[1\], r\[2\] \?\? 0\.0001\]\)/, 'per-item rate overrides must reach MOB_DROPS');
 const orbDropProbability = Number(orbDropEntries[0][1]) / 100;
 assert.equal(normalDrop(orbDropProbability), 0.0002, 'normal mode: 0.02% per kill');
 assert.equal(casualDrop(orbDropProbability), 0.1, 'casual solo: 10% per kill with x500');
